@@ -1,0 +1,27 @@
+# secrets
+.env
+*.key
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# node
+node_modules/
+frontend/dist/
+
+# firmware build output
+firmware/build/
+firmware/workspace/*/build/
+*.uf2
+*.elf
+*.bin
+!firmware/known_good/*.uf2
+
+# runtime data
+data/*.db
+data/*.db-journal
+data/logs/
+data/artifacts/
