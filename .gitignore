@@ -25,3 +25,5 @@ data/*.db
 data/*.db-journal
 data/logs/
 data/artifacts/
+
+firmware/*/build/
