@@ -199,3 +199,35 @@ class SerialLink:
         if reply == "OK" or reply.startswith("OK "):
             return reply[3:]
         raise LinkError(f"device rejected {command[:40]!r}: {reply}")
+
+    def reconnect(self, wait: float = 10.0) -> DeviceInfo:
+        """Keep trying to (re)connect for up to `wait` seconds. Raises NotConnected if it never works."""
+        with self._lock:
+            self._reconnect(wait)
+            return self.info
+
+    def send_partial(self, text: str, listen: float = 3.0) -> list:
+        """Send `text` WITHOUT a line ending, then listen for `listen` seconds and return every
+        reply line that arrives. Used to test the firmware's incomplete-line timeout."""
+        with self._lock:
+            if not self.is_connected:
+                raise NotConnected("not connected")
+            ser = self._ser
+            lines = []
+            try:
+                ser.reset_input_buffer()
+                self._log("TX", f"{text} (no line ending)")
+                ser.write(text.encode("utf-8"))
+                ser.flush()
+                deadline = time.monotonic() + listen
+                while time.monotonic() < deadline:
+                    raw = ser.readline()
+                    if raw.endswith(b"\n"):
+                        reply = raw.decode("utf-8", errors="replace").strip()
+                        self._log("RX", reply)
+                        lines.append(reply)
+            except (serial.SerialException, OSError) as e:
+                self._log("ERR", f"link lost: {e}")
+                self.close()
+                raise NotConnected(f"link lost: {e}") from e
+            return lines
