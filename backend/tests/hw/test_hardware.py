@@ -1,4 +1,4 @@
-"""Hardware-in-the-loop tests. The board must be plugged in and running the Phase 1 firmware.
+"""Hardware-in-the-loop tests. The board must be plugged in and running the Phase 2 firmware.
 Run with:  python -m pytest -m hardware -v   (stop the backend server first: it also uses the COM port)
 """
 import random
@@ -24,8 +24,8 @@ def test_board_is_visible_on_usb():
 
 
 def test_handshake(link):
-    assert link.info.firmware == "AEISP-ECHO"
-    assert link.info.version == "0.1.0"
+    assert link.info.firmware == "AEISP-DEV"
+    assert link.info.version == "0.2.0"
     assert len(link.info.uid) == 16
 
 
@@ -50,16 +50,16 @@ def test_echo_200_random_payloads(link):
 
 
 def test_unknown_command_rejected(link):
-    assert link.request("HELLO_WORLD", retries=0) == "ERR UNKNOWN"
-    assert link.request("ping", retries=0) == "ERR UNKNOWN"  # case sensitive
+    assert link.request("HELLO_WORLD", retries=0).startswith("ERR 1 UNKNOWN_CMD")
+    assert link.request("ping", retries=0).startswith("ERR 1 UNKNOWN_CMD")  # case sensitive
 
 
-def test_echo_without_text_is_usage_error(link):
-    assert link.request("ECHO", retries=0) == "ERR USAGE"
+def test_echo_without_text_is_args_error(link):
+    assert link.request("ECHO", retries=0).startswith("ERR 2 BAD_ARGS")
 
 
 def test_too_long_line_rejected_and_device_recovers(link):
-    assert link.request("A" * 300, retries=0) == "ERR TOOLONG"
+    assert link.request("A" * 300, retries=0).startswith("ERR 5 TOO_LONG")
     assert link.request("PING", retries=0) == "OK PONG"
 
 
