@@ -27,3 +27,4 @@ data/logs/
 data/artifacts/
 
 firmware/*/build/
+data/deployments/
