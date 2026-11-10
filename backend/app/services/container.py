@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 from ..audit import AuditLog
 from ..build.engine import BuildStore
@@ -11,7 +12,12 @@ from ..deploy.engine import DeployConfig, load_deploy_config
 from ..deploy.store import DeploymentStore
 from ..jobs import JobContext, JobFailed, JobManager
 from ..settings import Settings
+from ..tools import ToolRegistry, build_registry
+from .builds import BuildService
+from .deployments import DeployService
 from .device import DeviceManager
+from .firmware import FirmwareManager
+from .testing import TestService
 
 
 @dataclass
@@ -21,6 +27,11 @@ class Services:
     audit: AuditLog
     device: DeviceManager
     jobs: JobManager
+    firmware: Optional[FirmwareManager] = None
+    builds: Optional[BuildService] = None
+    deploys: Optional[DeployService] = None
+    tests: Optional[TestService] = None
+    tools: Optional[ToolRegistry] = None
 
     def start(self) -> None:
         self.jobs.start()
@@ -48,4 +59,13 @@ def build_services(settings: Settings) -> Services:
     jobs = JobManager(settings.db_path, {"build": settings.build_workers, "board": 1, "system": 1},
                       settings.proposal_ttl_s)
     jobs.register("selftest", _selftest_runner, "system")
-    return Services(settings=settings, cfg=cfg, audit=AuditLog(settings.db_path), device=DeviceManager(), jobs=jobs)
+    audit = AuditLog(settings.db_path)
+    device = DeviceManager()
+
+    s = Services(settings=settings, cfg=cfg, audit=audit, device=device, jobs=jobs)
+    s.firmware = FirmwareManager(cfg)
+    s.builds = BuildService(cfg, jobs, s.firmware)
+    s.deploys = DeployService(cfg, jobs, device, audit)
+    s.tests = TestService(settings.db_path, jobs, device)
+    s.tools = build_registry(s)
+    return s
