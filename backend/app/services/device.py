@@ -29,6 +29,20 @@ OPERATOR_VERBS = {"REBOOT"}
 _VERB = re.compile(r"^(?:#\d{1,5}\s+)?([A-Z][A-Z0-9_]*)")
 
 
+def validate_command(text: str, operator: bool = False) -> str:
+    """Return the command word if `text` may be sent through the API; raise ApiError otherwise."""
+    if not text or len(text) > 120 or "\n" in text or "\r" in text:
+        raise ApiError(422, "bad_command", "a command must be 1-120 characters on a single line")
+    m = _VERB.match(text)
+    verb = m.group(1) if m else ""
+    if verb in OPERATOR_VERBS and not operator:
+        raise ApiError(403, "forbidden", f"{verb} needs the 'operator' role")
+    if verb not in SAFE_VERBS | OPERATOR_VERBS:
+        raise ApiError(422, "command_not_allowed",
+                       f"command not allowed through the API: {verb or text.split(' ')[0]!r}")
+    return verb
+
+
 class DeviceManager:
     def __init__(self, link_factory: Callable[[], SerialLink] = SerialLink) -> None:
         self._mutex = threading.Lock()
@@ -55,6 +69,15 @@ class DeviceManager:
             self._owner = None
             self._mutex.release()
 
+    @contextmanager
+    def session(self, who: str, wait_s: float = 3.0):
+        """Hold the board and give back a function  send(command) -> reply line  that uses the shared connection.
+        For jobs that send many commands in a row (the test runner)."""
+        with self.exclusive(who, wait_s=wait_s, release_port=False):
+            def send(text: str) -> str:
+                return self._link.request(text, retries=0, reconnect_wait=5.0)
+            yield send
+
     # ---------------------------------------------------------------- read
     def ports(self) -> list:
         return [p.to_dict() for p in list_all_ports()]
@@ -78,15 +101,7 @@ class DeviceManager:
 
     # ---------------------------------------------------------------- command
     def command(self, text: str, who: str, operator: bool = False) -> dict:
-        if not text or len(text) > 120 or "\n" in text or "\r" in text:
-            raise ApiError(422, "bad_command", "a command must be 1-120 characters on a single line")
-        m = _VERB.match(text)
-        verb = m.group(1) if m else ""
-        if verb in OPERATOR_VERBS and not operator:
-            raise ApiError(403, "forbidden", f"{verb} needs the 'operator' role")
-        if verb not in SAFE_VERBS | OPERATOR_VERBS:
-            raise ApiError(422, "command_not_allowed",
-                           f"command not allowed through the API: {verb or text.split(' ')[0]!r}")
+        validate_command(text, operator)
         t0 = time.perf_counter()
         with self.exclusive(who, wait_s=3.0, release_port=False):
             # retries=0: never silently repeat a command that may already have had an effect (LED TOGGLE ...)
