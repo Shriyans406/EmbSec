@@ -16,7 +16,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 from .api import core as api_core
+from .api import deployments as api_deployments
 from .api import device as api_device
+from .api import firmware as api_firmware
+from .api import tools as api_tools
 from .errors import install_error_handlers
 from .logging_setup import request_id_var, setup_logging
 from .services.container import Services, build_services
@@ -74,6 +77,9 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
 
     app.include_router(api_core.router)
     app.include_router(api_device.router)
+    app.include_router(api_firmware.router)
+    app.include_router(api_deployments.router)
+    app.include_router(api_tools.router)
     return app
 
 
