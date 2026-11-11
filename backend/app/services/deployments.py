@@ -40,6 +40,13 @@ class DeployService:
         with self.device.exclusive(f"pre-flight check for {who}", wait_s=3.0):
             return run_preflight(self.cfg, self.board_factory(), image, self._store(), kind=kind)
 
+    @staticmethod
+    def _preflight_failure(checks: list) -> ApiError:
+        """An error that says WHY the proposal was refused (the board is missing, the image changed, ...)."""
+        reasons = "; ".join(f"{c['name']}: {c['detail']}" for c in checks if c["status"] == "FAIL")
+        return ApiError(409, "preflight_failed", f"the pre-flight checks failed - {reasons} (nothing was proposed)",
+                        checks)
+
     def _next_step(self, job_id: int, token: str) -> str:
         minutes = max(1, self.jobs.ttl // 60)
         return (f"WAITING FOR A HUMAN. An operator must approve job {job_id} by sending POST /jobs/{job_id}/approve "
@@ -51,9 +58,7 @@ class DeployService:
         pf = self._preflight(image, "deploy", requested_by)
         checks = [asdict(c) for c in pf.checks]
         if not pf.ok:
-            bad = ", ".join(c["name"] for c in checks if c["status"] == "FAIL")
-            raise ApiError(409, "preflight_failed", f"the pre-flight checks failed ({bad}); nothing was proposed",
-                           checks)
+            raise self._preflight_failure(checks)
         uid = pf.before.uid
         job = self.jobs.submit(
             "deploy",
@@ -69,9 +74,7 @@ class DeployService:
         pf = self._preflight(image, "recover", requested_by)
         checks = [asdict(c) for c in pf.checks]
         if not pf.ok:
-            bad = ", ".join(c["name"] for c in checks if c["status"] == "FAIL")
-            raise ApiError(409, "preflight_failed", f"the pre-flight checks failed ({bad}); nothing was proposed",
-                           checks)
+            raise self._preflight_failure(checks)
         job = self.jobs.submit(
             "recover", {"target": target, "image_sha256": image.sha256, "checks": checks,
                         "board_uid": pf.before.uid},

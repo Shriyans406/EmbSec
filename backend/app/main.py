@@ -13,6 +13,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from .api import core as api_core
@@ -74,6 +75,10 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
                     services.audit.write, p.name if p else "-", p.role if p else "-",
                     f"http:{request.method}", request.url.path, str(status))
             request_id_var.reset(token)
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        return RedirectResponse("/docs")
 
     app.include_router(api_core.router)
     app.include_router(api_device.router)

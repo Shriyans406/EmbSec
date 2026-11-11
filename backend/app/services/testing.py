@@ -161,6 +161,10 @@ class TestService:
                             (ctx.job_id, p["name"], passed, failed, total, started, now_iso(), json.dumps(out)))
             out["run_id"] = int(cur.lastrowid)
         ctx.log(f"result: {passed} passed, {failed} failed" + (" (stopped early: the board stopped answering)" if aborted else ""))
+        if aborted:
+            planned = len(p["cases"]) * p["repeat"]
+            raise JobFailed(f"the board stopped answering ({results[-1]['why']}); only {total} of {planned} checks "
+                            f"could run", out)
         if failed:
             raise JobFailed(f"{failed} of {total} checks failed", out)
         return out
