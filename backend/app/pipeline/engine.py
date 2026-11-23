@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Callable, Optional
 
 from ..ai import prompts
@@ -27,6 +28,7 @@ from ..errors import ApiError
 from ..jobs import AWAITING, JobContext, JobFailed
 from ..jobs import FINAL as JOB_FINAL
 from ..services.testing import RunRequest, TestCase
+from .report import build_report, to_markdown, write_markdown
 from .spec import spec_cases, spec_for_coder, write_spec
 from .store import (BUILD, CODE, DEPLOYED, DONE, FAILED, FINAL, FINISHED, PROPOSE, QUEUED, REPORT, RUNNING, SCAN,
                     SPEC, STOPPED, TEST, WAITING, PipelineStore)
@@ -285,10 +287,19 @@ class PipelineEngine:
 
     def stage_report(self, p: dict, log_fn) -> str:
         outcome = p["outcome"] or ("success" if p["params"].get("deploy", True) else "built")
-        report = {"outcome": outcome, "project": p["project"], "build_id": p["build_id"],
-                  "fix_rounds": p["fix_rounds"], "error": p["error"], "builds": p["state"].get("builds", [])}
-        status = STOPPED if outcome == "stopped" else (FINISHED if outcome != "failed" else FAILED)
-        self.store.update(p["id"], report_json=json.dumps(report), outcome=outcome, status=status,
-                          finished_at=now_iso())
+        finished = now_iso()
         self._event(p, "done", f"pipeline finished: {outcome}", log_fn=log_fn)
+        report = build_report({**p, "outcome": outcome}, self.s, finished)
+        path = write_markdown(self.settings.root, p["id"], to_markdown(report, self.store.events(p["id"])))
+        report["markdown_path"] = str(path)
+        status = STOPPED if outcome == "stopped" else (FINISHED if outcome != "failed" else FAILED)
+        self.store.update(p["id"], report_json=json.dumps(report, default=str), outcome=outcome, status=status,
+                          finished_at=finished)
         return DONE
+
+    def report_markdown(self, pid: int) -> str:
+        p = self.get(pid)
+        if not p["report"]:
+            raise ApiError(409, "no_report_yet", f"pipeline {pid} has not finished")
+        path = Path(p["report"].get("markdown_path") or "")
+        return path.read_text(encoding="utf-8") if path.is_file() else to_markdown(p["report"], self.store.events(pid))
