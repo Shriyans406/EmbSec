@@ -60,8 +60,9 @@ class AgentService:
         """A key in .env, or a model handed in directly (tests and tools)."""
         return self.settings.ai_configured or self._custom_llm
 
-    def graph(self, spec: AgentSpec, on_step=None) -> AgentGraph:
-        return AgentGraph(spec, self.llm(), self.tools, self.jobs, self.store, self.settings, on_step=on_step)
+    def graph(self, spec: AgentSpec, on_step=None, max_steps: Optional[int] = None) -> AgentGraph:
+        return AgentGraph(spec, self.llm(), self.tools, self.jobs, self.store, self.settings, on_step=on_step,
+                          max_steps=max_steps)
 
     def close(self) -> None:
         try:
@@ -157,7 +158,7 @@ class AgentService:
     def _run_job(self, ctx: JobContext) -> dict:
         run = self.get(ctx.params["run_id"])
         spec = self._spec(run["agent"])
-        ag = self.graph(spec, ctx.log)
+        ag = self.graph(spec, ctx.log, run["max_steps"])
         self.store.update(run["id"], status=RUNNING, prompts_json=json.dumps(ag.prompt_refs()))
         ctx.log(f"agent run {run['id']} ({spec.name}) started: {run['goal'][:120]}")
         state = ag.initial_state(run["id"], run["goal"], run["params"].get("context", ""))
@@ -165,7 +166,7 @@ class AgentService:
 
     def _resume_job(self, ctx: JobContext) -> dict:
         run = self.get(ctx.params["run_id"])
-        ag = self.graph(self._spec(run["agent"]), ctx.log)
+        ag = self.graph(self._spec(run["agent"]), ctx.log, run["max_steps"])
         self.store.update(run["id"], status=RUNNING, pending_job_id=None)
         ctx.log(f"agent run {run['id']} resumed")
         return self._drive(ctx, run, ag, Command(resume={"by": "operator decision"}))

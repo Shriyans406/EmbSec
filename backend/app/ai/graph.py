@@ -112,14 +112,15 @@ def transcript(state: dict, limit: int = 60000) -> str:
 
 class AgentGraph:
     def __init__(self, spec: AgentSpec, llm: BaseLLM, tools, jobs, store: RunStore, settings,
-                 approval_wait_s: float = 900.0, on_step: Optional[Callable[[str], None]] = None) -> None:
+                 approval_wait_s: float = 900.0, on_step: Optional[Callable[[str], None]] = None,
+                 max_steps: Optional[int] = None) -> None:
         self.spec = spec
         self.llm = llm
         self.tools = tools
         self.jobs = jobs
         self.store = store
         self.settings = settings
-        self.max_steps = spec.max_steps or settings.ai_max_steps
+        self.max_steps = max_steps or spec.max_steps or settings.ai_max_steps
         self.approval_wait_s = approval_wait_s
         self.on_step = on_step or (lambda text: None)
         self.prompt = prompts.load(spec.prompt)
