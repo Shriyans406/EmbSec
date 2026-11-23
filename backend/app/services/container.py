@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from ..ai.service import AgentService
 from ..audit import AuditLog
 from ..build.engine import BuildStore
 from ..db import migrate
@@ -32,12 +33,15 @@ class Services:
     deploys: Optional[DeployService] = None
     tests: Optional[TestService] = None
     tools: Optional[ToolRegistry] = None
+    agents: Optional[AgentService] = None
 
     def start(self) -> None:
         self.jobs.start()
 
     def stop(self) -> None:
         self.jobs.stop()
+        if self.agents:
+            self.agents.close()
 
 
 def _selftest_runner(ctx: JobContext) -> dict:
@@ -51,12 +55,12 @@ def _selftest_runner(ctx: JobContext) -> dict:
     return {"slept": seconds}
 
 
-def build_services(settings: Settings) -> Services:
+def build_services(settings: Settings, llm_factory=None) -> Services:
     migrate(settings.db_path)
     cfg = load_deploy_config(settings.root)
     BuildStore(settings.db_path)        # make sure the build and deployment tables exist
     DeploymentStore(settings.db_path)
-    jobs = JobManager(settings.db_path, {"build": settings.build_workers, "board": 1, "system": 1},
+    jobs = JobManager(settings.db_path, {"build": settings.build_workers, "board": 1, "system": 1, "ai": 2},
                       settings.proposal_ttl_s)
     jobs.register("selftest", _selftest_runner, "system")
     audit = AuditLog(settings.db_path)
@@ -68,4 +72,5 @@ def build_services(settings: Settings) -> Services:
     s.deploys = DeployService(cfg, jobs, device, audit)
     s.tests = TestService(settings.db_path, jobs, device)
     s.tools = build_registry(s)
+    s.agents = AgentService(settings, jobs, s.tools, llm_factory)
     return s

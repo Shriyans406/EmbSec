@@ -83,6 +83,41 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         )""",
         "CREATE INDEX IF NOT EXISTS idx_llm_calls_run ON llm_calls (run_id)",
     ]),
+    (5, "agent_runs", [
+        """CREATE TABLE IF NOT EXISTS agent_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent TEXT NOT NULL,
+            goal TEXT NOT NULL,
+            status TEXT NOT NULL,
+            outcome TEXT,
+            requested_by TEXT,
+            thread_id TEXT,
+            parent_id INTEGER,
+            pending_job_id INTEGER,
+            steps INTEGER NOT NULL DEFAULT 0,
+            tokens INTEGER NOT NULL DEFAULT 0,
+            max_steps INTEGER,
+            stop_requested INTEGER NOT NULL DEFAULT 0,
+            params_json TEXT,
+            prompts_json TEXT,
+            answer TEXT,
+            report_json TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            finished_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS agent_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            ts TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT,
+            ok INTEGER,
+            detail_json TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps (run_id, id)",
+    ]),
 ]
 
 
