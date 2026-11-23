@@ -8,6 +8,6 @@ sqlalchemy==2.0.36
 alembic==1.14.0
 pytest==8.3.4
 httpx==0.28.1
-langgraph
-langchain-google-genai
-google-genai
+langgraph==1.2.19
+langchain-google-genai==4.3.7
+google-genai==2.8.0
