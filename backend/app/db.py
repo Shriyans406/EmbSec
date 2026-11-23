@@ -65,6 +65,24 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
             result_json TEXT
         )""",
     ]),
+    (4, "llm_calls", [
+        """CREATE TABLE IF NOT EXISTS llm_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            run_id INTEGER,
+            purpose TEXT,
+            model TEXT,
+            prompt_tokens INTEGER,
+            output_tokens INTEGER,
+            thought_tokens INTEGER,
+            total_tokens INTEGER,
+            latency_ms INTEGER,
+            attempts INTEGER,
+            ok INTEGER NOT NULL,
+            error TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_llm_calls_run ON llm_calls (run_id)",
+    ]),
 ]
 
 
