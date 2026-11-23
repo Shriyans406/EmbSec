@@ -51,7 +51,7 @@ def test_a_run_uses_tools_and_ends_with_a_report(client, services):
     run = wait_run(services, start(client)["id"])
     assert run["status"] == "FINISHED" and run["outcome"] == "success"
     assert run["steps"] == 2 and run["tokens"] == 300 and run["answer"] == "the project has one file"
-    assert [p["name"] for p in run["prompts"]] == ["lab_agent", "run_report"]
+    assert [p["name"] for p in run["prompts"]] == ["lab_agent", "platform", "run_report"]
     kinds = [(s["kind"], s["name"]) for s in services.agents.store.steps(run["id"])]
     assert kinds == [("model", "reply"), ("tool", "create_project"), ("model", "reply"), ("tool", "read_source"),
                      ("model", "reply"), ("report", "success")]
@@ -254,7 +254,7 @@ def test_agent_api_permissions_and_validation(client, services):
     assert msgs[0]["role"] == "user" and msgs[-1]["text"] == "ok"
     assert client.get("/agent/runs/999", headers=auth("viewer")).status_code == 404
     assert client.get("/agent/runs", headers=auth("viewer")).json()[0]["id"] == run["id"]
-    assert [p["name"] for p in client.get("/agent/prompts", headers=auth("viewer")).json()] == ["lab_agent", "run_report"]
+    assert {"lab_agent", "platform", "run_report", "supervisor", "verification_agent"} <= {p["name"] for p in client.get("/agent/prompts", headers=auth("viewer")).json()}
 
 
 def test_runs_refused_when_no_model_is_configured(client, services):
@@ -286,7 +286,9 @@ def test_orphaned_runs_are_failed_on_start(settings):
 def test_prompts_parse_and_render():
     p = prompts.load("lab_agent")
     assert p.version >= 1 and len(p.sha256) == 64
-    assert "25" in p.render(max_steps=25) and "$max_steps" not in p.render(max_steps=25)
+    assert "PLATFORM-TEXT" in p.render(platform="PLATFORM-TEXT") and "$platform" not in p.render(platform="x")
+    plat = prompts.load("platform")
+    assert "(25)" in plat.render(max_steps=25) and "$max_steps" not in plat.render(max_steps=25)
     with pytest.raises(prompts.PromptError):
         p.render()
     with pytest.raises(prompts.PromptError):

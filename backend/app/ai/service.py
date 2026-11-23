@@ -13,7 +13,8 @@ from langgraph.types import Command
 
 from ..errors import ApiError
 from ..jobs import AWAITING, JobContext, JobFailed, JobManager
-from .graph import LAB_AGENT, AgentGraph, AgentSpec
+from .agents import all_specs
+from .graph import AgentGraph, AgentSpec
 from .llm import BaseLLM, LLMError, UsageLog, make_llm
 from .runs import FAILED, FINAL, FINISHED, QUEUED, RUNNING, STOPPED, WAITING, RunStore
 
@@ -33,7 +34,7 @@ class AgentService:
         self._custom_llm = llm_factory is not None
         self._llm_factory = llm_factory or (lambda: make_llm(settings, self.usage))
         self._llm: Optional[BaseLLM] = None
-        self.specs: Dict[str, AgentSpec] = {LAB_AGENT.name: LAB_AGENT}
+        self.specs: Dict[str, AgentSpec] = all_specs()
         path = Path(checkpoint_path or settings.checkpoint_db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)

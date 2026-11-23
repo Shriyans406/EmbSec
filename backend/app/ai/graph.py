@@ -73,6 +73,11 @@ class AgentSpec:
     description: str = ""
     max_steps: Optional[int] = None
     extra: dict = field(default_factory=dict)
+    report_prompt: str = "run_report"
+    report_schema: Optional[dict] = None     # None = REPORT_SCHEMA
+
+    def schema(self) -> dict:
+        return self.report_schema or REPORT_SCHEMA
 
 
 LAB_AGENT = AgentSpec("lab", "lab_agent", None, "general lab agent with every agent-role tool")
@@ -124,14 +129,16 @@ class AgentGraph:
         self.approval_wait_s = approval_wait_s
         self.on_step = on_step or (lambda text: None)
         self.prompt = prompts.load(spec.prompt)
-        self.report_prompt = prompts.load("run_report")
-        self.system = self.prompt.render(max_steps=self.max_steps)
+        self.platform = prompts.load("platform")
+        self.report_prompt = prompts.load(spec.report_prompt)
+        self.system = self.prompt.render(max_steps=self.max_steps,
+                                         platform=self.platform.render(max_steps=self.max_steps).strip())
         allowed = None if spec.tools is None else set(spec.tools)
         self.declarations = [d for d in tools.declarations(AGENT_PRINCIPAL) if allowed is None or d["name"] in allowed]
         self.allowed = {d["name"] for d in self.declarations}
 
     def prompt_refs(self) -> list:
-        return [self.prompt.ref(), self.report_prompt.ref()]
+        return [self.prompt.ref(), self.platform.ref(), self.report_prompt.ref()]
 
     # ------------------------------------------------------------ nodes
     def model_node(self, state: AgentState) -> dict:
@@ -234,11 +241,13 @@ class AgentGraph:
         if stop:
             ask += f"\nPLATFORM: the run was ended early: {stop}"
         try:
-            report, _ = self.llm.generate_json(self.report_prompt.text, [{"role": "user", "text": ask}], REPORT_SCHEMA,
-                                               purpose=f"{self.spec.name}:report", run_id=run_id)
+            report, _ = self.llm.generate_json(self.report_prompt.text, [{"role": "user", "text": ask}],
+                                               self.spec.schema(), purpose=f"{self.spec.name}:report", run_id=run_id)
         except LLMError as e:
             report = {"outcome": "failed", "summary": f"no report: the model failed ({e})", "facts": [],
                       "changes": [], "unverified": [], "next_steps": []}
+        if report.get("outcome") not in REPORT_SCHEMA["properties"]["outcome"]["enum"]:
+            report["outcome"] = "failed"
         self.store.add_step(run_id, "report", report.get("outcome", ""), True, report)
         return {"report": report}
 
