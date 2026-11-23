@@ -150,8 +150,9 @@ class PipelineEngine:
         self._event(p, "done" if res["outcome"] in ("success", "partial") else "warning",
                     f"firmware agent run {res['child_run_id']}: {res['outcome']}",
                     {"summary": (res.get("report") or {}).get("summary")}, log_fn)
-        if res["status"] == "FAILED":
-            raise StageFailed(f"the firmware agent failed: {res.get('error')}")
+        if res["status"] == "FAILED" or (res.get("error") or "").startswith("the model failed"):
+            # building would only test the OLD code against the new spec: stop and say why
+            raise StageFailed(f"the firmware agent could not work: {(res.get('error') or '')[:300]}")
         return BUILD
 
     def _fix_round(self, p: dict, why: str, task: str, log_fn) -> str:

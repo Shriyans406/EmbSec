@@ -282,3 +282,12 @@ def test_pipeline_api_rules(client, services, builds):
     services.agents._custom_llm = False
     r = client.post("/pipelines", headers=auth("agent"), json={"requirement": "a calculator please"})
     assert r.status_code == 503 and r.json()["error"]["code"] == "ai_not_configured"
+
+
+def test_a_model_failure_while_coding_stops_before_the_build(client, services, builds):
+    from fake_llm import failing
+
+    use(services, FakeLLM([failing("429 RESOURCE_EXHAUSTED quota")], report=[SPEC, DEFAULT_REPORT]))
+    p = wait_pipe(services, start(client)["id"], ("FINISHED", "FAILED", "STOPPED"))
+    assert p["outcome"] == "failed" and "could not work" in p["error"] and "429" in p["error"]
+    assert builds.calls == 0
