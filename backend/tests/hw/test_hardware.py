@@ -1,4 +1,4 @@
-"""Hardware-in-the-loop tests. The board must be plugged in and running the Phase 2 firmware.
+"""Hardware-in-the-loop tests. The board must be plugged in and running the harness firmware (0.3.0).
 Run with:  python -m pytest -m hardware -v   (stop the backend server first: it also uses the COM port)
 """
 import random
@@ -25,7 +25,7 @@ def test_board_is_visible_on_usb():
 
 def test_handshake(link):
     assert link.info.firmware == "AEISP-DEV"
-    assert link.info.version == "0.2.0"
+    assert link.info.version == "0.3.0"
     assert len(link.info.uid) == 16
 
 
