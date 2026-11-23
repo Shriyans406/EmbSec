@@ -15,7 +15,7 @@ from .deps import get_services
 
 router = APIRouter()
 
-PHASE = 5
+PHASE = 6
 
 
 class ApproveBody(BaseModel):

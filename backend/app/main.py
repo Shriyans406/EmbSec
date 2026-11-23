@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
+from .api import agents as api_agents
 from .api import core as api_core
 from .api import deployments as api_deployments
 from .api import device as api_device
@@ -85,6 +86,7 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
     app.include_router(api_firmware.router)
     app.include_router(api_deployments.router)
     app.include_router(api_tools.router)
+    app.include_router(api_agents.router)
     return app
 
 
