@@ -209,11 +209,32 @@ class AgentGraph:
         except ApiError as e:
             return {"error": {"code": e.code, "message": e.message}}
 
+    def _security_gate(self, run_id: int, args: dict) -> Optional[dict]:
+        """No agent may propose a build whose sources fail the security scan. The scan is deterministic code."""
+        try:
+            scan = self.tools.call("security_scan", {"build_id": args.get("build_id")}, AGENT_PRINCIPAL)
+        except ApiError as e:
+            return {"error": {"code": "security_gate", "message": f"the security scan could not run: {e.message}"}}
+        if scan["verdict"] == "PASS":
+            return None
+        blocking = [f for f in scan["findings"] if f["severity"] in ("critical", "high")]
+        self.store.add_step(run_id, "gate", "security", False, {"build_id": args.get("build_id"),
+                                                              "counts": scan["counts"]})
+        return {"error": {"code": "security_gate",
+                          "message": f"build #{args.get('build_id')} fails the security scan; it cannot be proposed "
+                                     "until these are fixed and it is rebuilt",
+                          "details": [{k: f[k] for k in ("rule", "severity", "title", "file", "line", "advice")}
+                                      for f in blocking[:10]]}}
+
     def _call_one(self, run_id: int, name: str, args: dict, call_id: str = "") -> dict:
         if name not in self.allowed:
             return {"error": {"code": "tool_not_allowed", "message": f"the {self.spec.name} agent may not use '{name}'"}}
         if name == "delegate":
             return self._delegate(run_id, call_id, args)
+        if name == "propose_deployment" and self.settings.ai_security_gate:
+            refused = self._security_gate(run_id, args)
+            if refused:
+                return refused
         try:
             result = self.tools.call(name, args, AGENT_PRINCIPAL)
             return {"result": _shorten(result, self.settings.ai_tool_result_chars)}

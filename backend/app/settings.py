@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     ai_timeout_s: int = 90             # one model call gives up after this
     ai_retries: int = 4                # retries of a model call on 429 / 5xx
     ai_tool_result_chars: int = 6000   # tool results longer than this are cut before the model sees them
+    ai_security_gate: bool = True      # agents cannot propose a build that fails the security scan
 
     @property
     def ai_configured(self) -> bool:

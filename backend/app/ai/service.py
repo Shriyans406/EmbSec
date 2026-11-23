@@ -27,6 +27,31 @@ log = logging.getLogger("aeisp.ai")
 
 RECURSION_LIMIT = 400
 MAX_CHILDREN = 12          # most specialist tasks one Supervisor run may start
+INDEPENDENT = {"verification"}
+
+
+def team_policy(report: dict, children: List[dict]) -> dict:
+    """The Supervisor may only call a run a success when the code that was last changed has been verified on the
+    board by the independent verifier (verdict pass), and no security review of it failed."""
+    report = dict(report or {})
+    if report.get("outcome") != "success":
+        return report
+    order = sorted(children, key=lambda c: c["id"])
+    last_change = max((c["id"] for c in order if c["agent"] == "firmware"), default=0)
+    verified = [c for c in order if c["agent"] == "verification" and c["id"] > last_change
+                and (c.get("report") or {}).get("verdict") == "pass"]
+    security_failed = [c for c in order if c["agent"] == "security" and c["id"] > last_change
+                       and (c.get("report") or {}).get("verdict") == "fail"]
+    notes = []
+    if last_change and not verified:
+        notes.append("no independent verification passed after the last code change")
+    if security_failed:
+        notes.append("the security review of the latest code failed")
+    if notes:
+        report["outcome"] = "partial"
+        report["unverified"] = list(report.get("unverified") or []) + notes
+        report["policy"] = notes
+    return report
 
 
 class _Delegator:
@@ -228,6 +253,10 @@ class AgentService:
             log_fn(f"agent run {run['id']} is waiting for a human to decide on job #{job_id}")
             return {"run_id": run["id"], "status": WAITING, "pending_job_id": job_id, "child_run_id": child_id}
         report = values.get("report") or {}
+        if ag.spec.extra.get("delegates"):
+            report = team_policy(report, self.store.list(200, parent_id=run["id"]))
+            if report.get("policy"):
+                self.store.add_step(run["id"], "policy", "team", False, {"notes": report["policy"]})
         stop = values.get("stop_reason")
         status = STOPPED if stop and "operator" in stop else FINISHED
         self.store.finish(run["id"], status, outcome=report.get("outcome"), answer=values.get("answer", ""),
@@ -265,6 +294,18 @@ class AgentService:
 
     # ------------------------------------------------------------ child runs (specialists)
     def child_task(self, parent: dict, agent: str, task: str, project: Optional[str], build_id: Optional[int]) -> str:
+        if agent in INDEPENDENT:
+            # the verifier gets the ORIGINAL goal and the facts, never the Supervisor's wording (which may carry the
+            # other agents' beliefs about what the code does)
+            root = parent
+            while root.get("parent_id"):
+                root = self.get(root["parent_id"])
+            lines = [f"Verify on the real board that this goal is met: {root['goal']}"]
+            if project:
+                lines.append(f"Project: {project}")
+            lines.append(f"Build that should be on the board: #{build_id}" if build_id else
+                         "Build: not given - read it from VERSION and the deployment history")
+            return "\n".join(lines)
         lines = [task]
         if project:
             lines.append(f"Project: {project}")
@@ -292,7 +333,8 @@ class AgentService:
                                   {"call_id": call_id, "project": project, "build_id": build_id}, parent_id)
         ag = self.graph(spec, log_fn, child["max_steps"])
         self.store.update(child["id"], status=RUNNING, prompts_json=json.dumps(ag.prompt_refs()))
-        self.store.add_step(parent_id, "delegate", agent, None, {"child_run_id": child["id"], "task": goal[:1500]})
+        self.store.add_step(parent_id, "delegate", agent, None, {"child_run_id": child["id"], "task": goal[:1500],
+                                                                 "independent": agent in INDEPENDENT})
         log_fn(f"  -> {agent} agent (run {child['id']}): {task[:120]}")
         out = self._invoke(child, ag, ag.initial_state(child["id"], goal), log_fn)
         result = self.child_result(child["id"])
