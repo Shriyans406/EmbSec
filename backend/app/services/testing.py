@@ -254,6 +254,23 @@ class TestService:
             raise JobFailed(f"{failed} of {total} checks failed", out)
         return out
 
+    # ------------------------------------------------------------ regression
+    def compare(self, baseline_id: int, current_id: int) -> dict:
+        from ..testfw.regression import compare
+
+        return compare(self.db_path, baseline_id, current_id)
+
+    def regression(self, suite: str, build_id: Optional[int] = None, baseline_build: Optional[int] = None) -> dict:
+        from ..testfw.regression import regression
+
+        return regression(self.db_path, self.suites_db.get(suite)["id"], build_id, baseline_build)
+
+    def history(self, suite: str) -> dict:
+        from ..testfw.regression import history
+
+        s = self.suites_db.get(suite)
+        return {"suite": s["name"], "revision": s["revision"], "builds": history(self.db_path, s["id"])}
+
     # ------------------------------------------------------------ reading
     def list_runs(self, limit: int = 20) -> List[dict]:
         with connect(self.db_path) as c:
