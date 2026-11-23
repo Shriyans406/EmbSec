@@ -58,10 +58,23 @@ class AgentState(TypedDict, total=False):
     steps: int
     tokens: int
     pending_job: Optional[int]
+    pending_child: Optional[int]
     stop_reason: Optional[str]
     answer: str
     report: Optional[dict]
     wrap_up_asked: bool
+
+
+def delegate_declaration(agents: List[str]) -> dict:
+    return {"name": "delegate",
+            "description": "Hand ONE task to a specialist agent and get its structured report back. The specialist "
+                           "only sees what you write in 'task' (plus project / build_id), so make it complete.",
+            "parameters": {"type": "object", "properties": {
+                "agent": {"type": "string", "enum": agents, "description": "which specialist"},
+                "task": {"type": "string", "description": "the complete task, including what 'done' means"},
+                "project": {"type": "string", "nullable": True, "description": "the firmware project"},
+                "build_id": {"type": "integer", "nullable": True, "description": "the build the task is about"},
+            }, "required": ["agent", "task"]}}
 
 
 @dataclass
@@ -118,7 +131,7 @@ def transcript(state: dict, limit: int = 60000) -> str:
 class AgentGraph:
     def __init__(self, spec: AgentSpec, llm: BaseLLM, tools, jobs, store: RunStore, settings,
                  approval_wait_s: float = 900.0, on_step: Optional[Callable[[str], None]] = None,
-                 max_steps: Optional[int] = None) -> None:
+                 max_steps: Optional[int] = None, delegator=None) -> None:
         self.spec = spec
         self.llm = llm
         self.tools = tools
@@ -135,6 +148,9 @@ class AgentGraph:
                                          platform=self.platform.render(max_steps=self.max_steps).strip())
         allowed = None if spec.tools is None else set(spec.tools)
         self.declarations = [d for d in tools.declarations(AGENT_PRINCIPAL) if allowed is None or d["name"] in allowed]
+        self.delegator = delegator if spec.extra.get("delegates") else None
+        if self.delegator is not None:
+            self.declarations.append(delegate_declaration(self.delegator.names()))
         self.allowed = {d["name"] for d in self.declarations}
 
     def prompt_refs(self) -> list:
@@ -175,9 +191,29 @@ class AgentGraph:
             update["answer"] = reply.text
         return update
 
-    def _call_one(self, run_id: int, name: str, args: dict) -> dict:
+    def _delegate(self, run_id: int, call_id: str, args: dict) -> dict:
+        agent, task = args.get("agent"), args.get("task")
+        if agent not in self.delegator.names():
+            return {"error": {"code": "invalid_arguments", "message": f"agent must be one of {self.delegator.names()}"}}
+        if not isinstance(task, str) or not (5 <= len(task.strip()) <= 4000):
+            return {"error": {"code": "invalid_arguments", "message": "task must be 5..4000 characters"}}
+        build_id = args.get("build_id")
+        if build_id is not None and not isinstance(build_id, int):
+            try:
+                build_id = int(build_id)
+            except (TypeError, ValueError):
+                return {"error": {"code": "invalid_arguments", "message": "build_id must be a whole number"}}
+        try:
+            return {"result": self.delegator.run(run_id, call_id, agent, task.strip(), args.get("project") or None,
+                                                 build_id or None)}
+        except ApiError as e:
+            return {"error": {"code": e.code, "message": e.message}}
+
+    def _call_one(self, run_id: int, name: str, args: dict, call_id: str = "") -> dict:
         if name not in self.allowed:
             return {"error": {"code": "tool_not_allowed", "message": f"the {self.spec.name} agent may not use '{name}'"}}
+        if name == "delegate":
+            return self._delegate(run_id, call_id, args)
         try:
             result = self.tools.call(name, args, AGENT_PRINCIPAL)
             return {"result": _shorten(result, self.settings.ai_tool_result_chars)}
@@ -192,17 +228,22 @@ class AgentGraph:
         run_id = state["run_id"]
         calls = state["messages"][-1].get("calls", [])
         steps = state.get("steps", 0)
-        results, pending = [], state.get("pending_job")
+        results, pending, child = [], state.get("pending_job"), state.get("pending_child")
         for c in calls:
             if steps >= self.max_steps:
                 response = {"error": {"code": "step_limit", "message": "the step limit is reached; this call was not run"}}
+            elif pending or child:
+                response = {"error": {"code": "waiting_for_human",
+                                      "message": "an earlier call in this turn is waiting for a human; not run"}}
             else:
                 steps += 1
-                response = self._call_one(run_id, c["name"], c.get("args") or {})
+                response = self._call_one(run_id, c["name"], c.get("args") or {}, f"{run_id}:{steps}:{c.get('id')}")
             ok = "error" not in response
             res = response.get("result")
             if ok and isinstance(res, dict) and res.get("status") == AWAITING and res.get("kind") in PROPOSAL_KINDS:
                 pending = res["id"]
+            if ok and c["name"] == "delegate" and isinstance(res, dict) and res.get("status") == "WAITING_APPROVAL":
+                child = res["child_run_id"]
             self.store.add_step(run_id, "tool", c["name"], ok,
                                 {"args": _shown_args(c["name"], c.get("args") or {}),
                                  "response": _shorten(response, 1500)})
@@ -210,7 +251,28 @@ class AgentGraph:
             results.append({"id": c.get("id"), "name": c["name"], "response": response})
         self.store.update(run_id, steps=steps)
         return {"messages": state["messages"] + [{"role": "tool", "results": results}], "steps": steps,
-                "pending_job": pending}
+                "pending_job": pending, "pending_child": child}
+
+    def wait_child_node(self, state: AgentState) -> dict:
+        """A specialist (child run) paused at a proposal: pause this run too, then let the child continue."""
+        run_id, child_id = state["run_id"], state["pending_child"]
+        child = self.store.get(child_id)
+        if child and child["status"] == "WAITING_APPROVAL":
+            job = self.jobs.get(child["pending_job_id"]) if child["pending_job_id"] else None
+            if job is not None and job["status"] == AWAITING:
+                self.store.add_step(run_id, "approval", "waiting", None,
+                                    {"child_run_id": child_id, "job_id": job["id"], "summary": job.get("summary")})
+                interrupt({"child_run_id": child_id, "job_id": job["id"], "summary": job.get("summary")})
+            out = self.delegator.resume(child_id)
+        else:
+            out = self.delegator.result(child_id)
+        if out.get("status") == "WAITING_APPROVAL":          # the child made another proposal
+            return {"pending_child": child_id}
+        self.store.add_step(run_id, "delegate", "resumed", out.get("outcome") in ("success", "partial"),
+                            {"child_run_id": child_id, "outcome": out.get("outcome")})
+        text = (f"[platform] The {out.get('agent')} agent (run #{child_id}) continued after the human decision and "
+                f"finished. Its report: {json.dumps(_shorten(out, 6000), default=str)}")
+        return {"messages": state["messages"] + [{"role": "user", "text": text}], "pending_child": None}
 
     def approval_node(self, state: AgentState) -> dict:
         run_id, job_id = state["run_id"], state["pending_job"]
@@ -261,17 +323,26 @@ class AgentGraph:
 
     @staticmethod
     def after_tools(state: AgentState) -> str:
-        return "approval" if state.get("pending_job") else "model"
+        if state.get("pending_job"):
+            return "approval"
+        return "wait_child" if state.get("pending_child") else "model"
+
+    @staticmethod
+    def after_wait_child(state: AgentState) -> str:
+        return "wait_child" if state.get("pending_child") else "model"
 
     def compile(self, checkpointer):
         g = StateGraph(AgentState)
         g.add_node("model", self.model_node)
         g.add_node("tools", self.tools_node)
         g.add_node("approval", self.approval_node)
+        g.add_node("wait_child", self.wait_child_node)
         g.add_node("report", self.report_node)
         g.add_edge(START, "model")
         g.add_conditional_edges("model", self.after_model, {"tools": "tools", "report": "report"})
-        g.add_conditional_edges("tools", self.after_tools, {"approval": "approval", "model": "model"})
+        g.add_conditional_edges("tools", self.after_tools,
+                                {"approval": "approval", "wait_child": "wait_child", "model": "model"})
+        g.add_conditional_edges("wait_child", self.after_wait_child, {"wait_child": "wait_child", "model": "model"})
         g.add_edge("approval", "model")
         g.add_edge("report", END)
         return g.compile(checkpointer=checkpointer)
@@ -279,5 +350,5 @@ class AgentGraph:
     def initial_state(self, run_id: int, goal: str, context: str = "") -> AgentState:
         text = goal if not context else f"{goal}\n\nContext:\n{context}"
         return {"run_id": run_id, "goal": goal, "messages": [{"role": "user", "text": text}], "steps": 0,
-                "tokens": 0, "pending_job": None, "stop_reason": None, "answer": "", "report": None,
+                "tokens": 0, "pending_job": None, "pending_child": None, "stop_reason": None, "answer": "", "report": None,
                 "wrap_up_asked": False}
