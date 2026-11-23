@@ -61,9 +61,12 @@ class FakeLLM(BaseLLM):
 
     def _generate_json(self, system, messages, schema):
         self.json_seen.append((system, messages))
-        if isinstance(self.report, Exception):
-            raise self.report
-        return LLMReply(text=json.dumps(self.report), usage=Usage(total=50), model=self.model)
+        report = self.report
+        if isinstance(report, list):                 # one report per run, in the order the runs finish
+            report = report.pop(0) if report else dict(DEFAULT_REPORT)
+        if isinstance(report, Exception):
+            raise report
+        return LLMReply(text=json.dumps(report), usage=Usage(total=50), model=self.model)
 
 
 def failing(message="429 RESOURCE_EXHAUSTED"):
