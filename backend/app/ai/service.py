@@ -342,6 +342,23 @@ class AgentService:
             result["job_id"] = out["pending_job_id"]
         return result
 
+    def run_inline(self, agent: str, goal: str, requested_by: str, params: Optional[dict] = None,
+                   log_fn=None) -> dict:
+        """Run one agent to its end inside the caller's thread (used by the pipeline). Returns its result."""
+        self._require_model()
+        spec = self._spec(agent)
+        run = self.store.create(spec.name, goal, requested_by, spec.max_steps or self.settings.ai_max_steps,
+                                params or {})
+        log_fn = log_fn or (lambda t: None)
+        ag = self.graph(spec, log_fn, run["max_steps"])
+        self.store.update(run["id"], status=RUNNING, prompts_json=json.dumps(ag.prompt_refs()))
+        out = self._invoke(run, ag, ag.initial_state(run["id"], goal), log_fn)
+        result = self.child_result(run["id"])
+        result["tokens"] = self.usage.totals(run["id"])["total"]
+        if out["status"] == WAITING:
+            result["job_id"] = out["pending_job_id"]
+        return result
+
     def resume_child(self, child_id: int, log_fn) -> dict:
         child = self.get(child_id)
         if child["status"] != WAITING:

@@ -135,20 +135,23 @@ def spec_for_coder(spec: dict) -> str:
     return "\n".join(lines)
 
 
-def write_spec(llm, requirement: str, platform_text: str, run_id=None, tries: int = 2) -> Tuple[dict, List[str]]:
-    """Ask the model for a spec; if plain-code checks find problems, give them back once and ask again."""
+def write_spec(llm, requirement: str, platform_text: str, run_id=None, tries: int = 2) -> Tuple[dict, List[str], int]:
+    """Ask the model for a spec; if plain-code checks find problems, give them back once and ask again.
+    Returns (spec, problems, tokens used)."""
     from ..ai import prompts
 
     system = prompts.load("spec_writer").render(platform=platform_text)
     messages = [{"role": "user", "text": f"Requirement:\n{requirement}"}]
     problems: List[str] = []
     spec: dict = {}
+    tokens = 0
     for attempt in range(tries):
-        raw, _ = llm.generate_json(system, messages, SPEC_SCHEMA, purpose="pipeline:spec", run_id=run_id)
+        raw, reply = llm.generate_json(system, messages, SPEC_SCHEMA, purpose="pipeline:spec", run_id=run_id)
+        tokens += reply.usage.total
         spec, problems = check_spec(raw)
         if not problems:
-            return spec, []
+            return spec, [], tokens
         messages += [{"role": "model", "text": json.dumps(raw)},
                      {"role": "user", "text": "These problems were found; return the corrected specification:\n- "
                                               + "\n- ".join(problems)}]
-    return spec, problems
+    return spec, problems, tokens

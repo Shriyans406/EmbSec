@@ -12,6 +12,7 @@ from ..db import migrate
 from ..deploy.engine import DeployConfig, load_deploy_config
 from ..deploy.store import DeploymentStore
 from ..jobs import JobContext, JobFailed, JobManager
+from ..pipeline.engine import PipelineEngine
 from ..settings import Settings
 from ..tools import ToolRegistry, build_registry
 from .analysis import AnalysisService
@@ -36,6 +37,7 @@ class Services:
     tools: Optional[ToolRegistry] = None
     agents: Optional[AgentService] = None
     analysis: Optional[AnalysisService] = None
+    pipelines: Optional["PipelineEngine"] = None
 
     def start(self) -> None:
         self.jobs.start()
@@ -76,4 +78,5 @@ def build_services(settings: Settings, llm_factory=None) -> Services:
     s.analysis = AnalysisService(cfg, s.firmware, device)
     s.tools = build_registry(s)
     s.agents = AgentService(settings, jobs, s.tools, llm_factory)
+    s.pipelines = PipelineEngine(s, settings)
     return s
