@@ -107,6 +107,7 @@ def app(settings, board):
     services.device = DeviceManager(link_factory=FakeLink)
     services.deploys.device = services.device
     services.tests.device = services.device
+    services.analysis.device = services.device
     services.deploys.board_factory = lambda: board          # no real board is ever touched in tests
     return create_app(settings, services)
 

@@ -103,6 +103,15 @@ class RunIdArg(BaseModel):
     run_id: int = Field(ge=1)
 
 
+class ScanArgs(BaseModel):
+    project: Optional[str] = Field(None, description="scan the project's current sources ...")
+    build_id: Optional[int] = Field(None, ge=1, description="... or the sources exactly as they were in this build")
+
+
+class LatencyArgs(CommandArgs):
+    count: int = Field(20, ge=1, le=50, description="how many times to send the command")
+
+
 # ---------------------------------------------------------------- JSON schema for the model (Gemini function declarations)
 def _clean(schema: dict) -> dict:
     """Reduce a pydantic JSON schema to the simple subset function-calling APIs accept."""
@@ -293,4 +302,15 @@ def build_registry(s) -> ToolRegistry:
            RunIdArg, "viewer", "read", lambda s, p, a: s.tests.get_run(a.run_id)))
     T(Tool("list_test_runs", "Recent test runs.",
            LimitArg, "viewer", "read", lambda s, p, a: s.tests.list_runs(a.limit)))
+
+    T(Tool("security_scan", "Rule-based security and safety scan of app code (GPIO 12/13, USB stdio, unsafe string "
+           "functions, flash/bootloader/watchdog access, heap, blocking loops, big stack arrays). Give project OR "
+           "build_id. Verdict FAIL if any critical or high finding.",
+           ScanArgs, "viewer", "read", lambda s, p, a: s.analysis.security_scan(a.project, a.build_id)))
+    T(Tool("size_report", "Flash and RAM use of a successful build, its largest symbols, the app's own symbols and "
+           "the change against the project's previous successful build.",
+           BuildIdArg, "viewer", "read", lambda s, p, a: s.analysis.size_report(a.build_id)))
+    T(Tool("measure_latency", "Send one safe protocol command several times and measure the round-trip time "
+           "(min / mean / median / p95 / max in ms).",
+           LatencyArgs, "agent", "write", lambda s, p, a: s.analysis.measure_latency(a.command, a.count, _who(p))))
     return r
