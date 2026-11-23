@@ -118,6 +118,41 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         )""",
         "CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps (run_id, id)",
     ]),
+    (6, "pipelines", [
+        """CREATE TABLE IF NOT EXISTS pipelines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            requirement TEXT NOT NULL,
+            project TEXT,
+            status TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            outcome TEXT,
+            requested_by TEXT,
+            spec_json TEXT,
+            build_id INTEGER,
+            deploy_job_id INTEGER,
+            test_run_id INTEGER,
+            fix_rounds INTEGER NOT NULL DEFAULT 0,
+            test_rounds INTEGER NOT NULL DEFAULT 0,
+            params_json TEXT,
+            state_json TEXT,
+            report_json TEXT,
+            error TEXT,
+            stop_requested INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            finished_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS pipeline_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pipeline_id INTEGER NOT NULL,
+            ts TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            message TEXT,
+            detail_json TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_pipeline_events ON pipeline_events (pipeline_id, id)",
+    ]),
 ]
 
 
