@@ -72,7 +72,10 @@ class FakeLink:
             self.is_connected = False
             raise LinkError("link lost: device disconnected")
         FakeLink.sent.append(text)
-        return FakeLink.replies.get(text, "OK")
+        reply = FakeLink.replies.get(text, "OK")
+        if isinstance(reply, list):              # a list = replies in order; the last one repeats
+            reply = reply.pop(0) if len(reply) > 1 else reply[0]
+        return reply
 
     def close(self):
         self.is_connected = False
