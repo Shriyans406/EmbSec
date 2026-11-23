@@ -75,8 +75,11 @@ class RunStore:
             r = c.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
         return self._row(r) if r else None
 
-    def list(self, limit: int = 20, status: Optional[str] = None, parent_id: Optional[int] = None) -> List[dict]:
+    def list(self, limit: int = 20, status: Optional[str] = None, parent_id: Optional[int] = None,
+             roots_only: bool = False) -> List[dict]:
         sql, args, conds = "SELECT * FROM agent_runs", [], []
+        if roots_only:
+            conds.append("parent_id IS NULL")
         if status:
             conds.append("status = ?")
             args.append(status)

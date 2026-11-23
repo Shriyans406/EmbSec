@@ -43,10 +43,30 @@ def start_run(body: StartRunBody, request: Request, p: Principal = Depends(requi
     return _agents(request).start(body.goal, f"api:{p.name}", body.agent, body.max_steps, body.context)
 
 
+class TeamBody(BaseModel):
+    goal: str = Field(min_length=5, max_length=4000, description="what the team should achieve")
+    max_steps: Optional[int] = Field(None, ge=1, le=60, description="most tool calls of the Supervisor")
+    context: str = Field("", max_length=8000)
+
+
+@router.post("/agent/team", status_code=202)
+def start_team(body: TeamBody, request: Request, p: Principal = Depends(require("agent"))) -> dict:
+    """Start the Supervisor, which plans the goal and hands tasks to the firmware, build, security, performance and
+    verification agents. Each task becomes a child run (see /agent/runs/{id}/tree)."""
+    return _agents(request).start(body.goal, f"api:{p.name}", "supervisor", body.max_steps, body.context)
+
+
 @router.get("/agent/runs")
 def list_runs(request: Request, status: Optional[str] = None, limit: int = Query(20, ge=1, le=200),
+              roots: bool = Query(False, description="only runs that were started directly (no child runs)"),
               p: Principal = Depends(require("viewer"))) -> list:
-    return _agents(request).store.list(limit, status)
+    return _agents(request).store.list(limit, status, roots_only=roots)
+
+
+@router.get("/agent/runs/{run_id}/tree")
+def run_tree(run_id: int, request: Request, p: Principal = Depends(require("viewer"))) -> dict:
+    """A team run with every specialist task, its outcome, its report and the tokens of the whole team."""
+    return _agents(request).tree(run_id)
 
 
 @router.get("/agent/runs/{run_id}")

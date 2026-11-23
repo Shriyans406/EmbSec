@@ -3,7 +3,8 @@
   python -m app.ai.cli status                      model, agents and token usage so far
   python -m app.ai.cli run "make the LED blink"    start a run and follow it step by step
         --agent lab   --max-steps 20
-  python -m app.ai.cli show 3                      a finished run: steps and report
+  python -m app.ai.cli team "add a TEMP_F command"  the Supervisor plans and delegates to the five specialists
+  python -m app.ai.cli show 3                      a finished run: steps, report and its team
   python -m app.ai.cli runs                        recent runs
 
 Stop the backend server first if the agent may talk to the board: both would use the COM port.
@@ -87,6 +88,7 @@ def cmd_run(args) -> int:
             _decide(s, run)
             job_id = s.agents.resume(run["id"], "cli")["job_id"]
         _show(s, run["id"])
+        _print_tree(s, run["id"])
         return 0 if run["status"] == "FINISHED" and run["outcome"] in ("success", "partial") else 1
     finally:
         s.stop()
@@ -107,11 +109,32 @@ def _show(s, run_id: int) -> None:
                 print(f"    {key[:-1] if key.endswith('s') else key}: {item}")
 
 
+def _print_tree(s, run_id: int) -> None:
+    t = s.agents.tree(run_id)
+    if not t["children"]:
+        return
+    print("\n  team:")
+    for c in t["children"]:
+        r = c.get("report") or {}
+        verdict = f" verdict={r['verdict']}" if r.get("verdict") else ""
+        print(f"    run {c['id']:>4} {c['agent']:<13} {c['status']:<17} {str(c['outcome']):<18}{verdict} "
+              f"steps={c['steps']} tokens={c['tokens']}")
+        if r.get("summary"):
+            print(f"         {r['summary'][:200]}")
+    print(f"  whole team: {t['team_usage']['total']} tokens in {t['team_usage']['calls']} model calls")
+
+
+def cmd_team(args) -> int:
+    args.agent = "supervisor"
+    return cmd_run(args)
+
+
 def cmd_show(args) -> int:
     s = _services()
     try:
         _print_steps(s.agents, args.run_id, 0)
         _show(s, args.run_id)
+        _print_tree(s, args.run_id)
     finally:
         s.stop()
     return 0
@@ -144,6 +167,10 @@ def main(argv=None) -> int:
     p.add_argument("--agent", default="lab")
     p.add_argument("--max-steps", type=int, default=None)
     p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("team", help="the Supervisor and its specialists work on the goal")
+    p.add_argument("goal")
+    p.add_argument("--max-steps", type=int, default=None)
+    p.set_defaults(fn=cmd_team)
     p = sub.add_parser("show")
     p.add_argument("run_id", type=int)
     p.set_defaults(fn=cmd_show)
