@@ -271,6 +271,30 @@ class TestService:
         s = self.suites_db.get(suite)
         return {"suite": s["name"], "revision": s["revision"], "builds": history(self.db_path, s["id"])}
 
+    # ------------------------------------------------------------ coverage
+    def latest_spec(self, project: str) -> Optional[dict]:
+        """The specification of the project's most recent pipeline, if there is one."""
+        try:
+            with connect(self.db_path) as c:
+                r = c.execute("SELECT spec_json FROM pipelines WHERE project = ? AND spec_json IS NOT NULL "
+                              "ORDER BY id DESC LIMIT 1", (project,)).fetchone()
+        except Exception:  # noqa: BLE001  (no pipelines table in very old databases)
+            return None
+        return json.loads(r["spec_json"]) if r else None
+
+    def coverage(self, suite: str, project: Optional[str] = None) -> dict:
+        from ..testfw.coverage import suite_coverage
+        from ..testfw.regression import runs_of_suite
+
+        s = self.suites_db.get(suite)
+        runs = runs_of_suite(self.db_path, s["id"], 1)
+        last = self.get_run(runs[0]["id"]) if runs else None
+        project = project or s["project"]
+        spec = self.latest_spec(project) if project else None
+        out = suite_coverage(s["cases"], last, spec)
+        out.update({"suite": s["name"], "revision": s["revision"], "project": project})
+        return out
+
     # ------------------------------------------------------------ reading
     def list_runs(self, limit: int = 20) -> List[dict]:
         with connect(self.db_path) as c:
