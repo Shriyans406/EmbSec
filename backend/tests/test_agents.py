@@ -67,7 +67,7 @@ def test_the_agent_acts_with_the_agent_role_and_sees_no_approval_tool(client, se
     llm = use(services, FakeLLM([say("nothing to do")]))
     wait_run(services, start(client)["id"])
     names = llm.seen[0][2]
-    assert len(names) == 25 and "propose_deployment" in names
+    assert len(names) == 33 and "propose_deployment" in names
     assert not [n for n in names if "approve" in n or "promote" in n]
     rows = client.get("/audit?limit=50", headers=auth("operator")).json()
     assert all(r["role"] == "agent" for r in rows if r["action"].startswith("tool."))

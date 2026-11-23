@@ -192,7 +192,7 @@ def test_the_whole_way_with_a_human_approval(client, services, builds, board):
     assert p["status"] == "FINISHED" and p["outcome"] == "success", p["error"]
     assert len(board.flashed) == 1 and p["test_run_id"]
     run = client.get(f"/tests/runs/{p['test_run_id']}", headers=auth("viewer")).json()
-    assert run["passed"] == run["total"] == 4                    # PING, VERSION, 2 examples
+    assert run["passed"] == run["total"] == 3                    # PING + the 2 examples
     assert "APP ADD 2 3" in FakeLink.sent and "VERSION" in FakeLink.sent
 
 
@@ -266,8 +266,8 @@ def test_the_report_is_built_from_the_records(client, services, builds, board):
     p = wait_pipe(services, p["id"], ("FINISHED", "FAILED", "STOPPED"))
     r = client.get(f"/pipelines/{p['id']}", headers=auth("viewer")).json()["report"]
     assert r["outcome"] == "success" and r["final_build"]["id"] == 1 and r["deployment"]["status"] == "SUCCEEDED"
-    assert r["tests"]["passed"] == 4 and r["spec"]["examples"] == 2 and r["tokens"]["total"] > 0
-    assert [c["passed"] for c in r["checks"]] == [True] * 4
+    assert r["tests"]["passed"] == 3 and r["spec"]["examples"] == 2 and r["tokens"]["total"] > 0
+    assert [c["passed"] for c in r["checks"]] == [True] * 3
     md = client.get(f"/pipelines/{p['id']}/report", headers=auth("viewer")).text
     assert md.startswith(f"# Pipeline {p['id']}: success") and "| ADD #1 | `APP ADD 2 3` | `OK sum=5` | PASS |" in md
     assert "approved by api:operator" in md

@@ -22,6 +22,7 @@ from .api import deployments as api_deployments
 from .api import device as api_device
 from .api import firmware as api_firmware
 from .api import pipelines as api_pipelines
+from .api import testsuites as api_testsuites
 from .api import tools as api_tools
 from .errors import install_error_handlers
 from .logging_setup import request_id_var, setup_logging
@@ -89,6 +90,7 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
     app.include_router(api_tools.router)
     app.include_router(api_agents.router)
     app.include_router(api_pipelines.router)
+    app.include_router(api_testsuites.router)
     return app
 
 

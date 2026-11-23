@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .errors import ApiError
 from .security import Principal
-from .services.testing import RunRequest
+from .services.testing import RunRequest, TestCase
 
 Handler = Callable[[Any, Principal, BaseModel], Any]
 
@@ -110,6 +110,40 @@ class ScanArgs(BaseModel):
 
 class LatencyArgs(CommandArgs):
     count: int = Field(20, ge=1, le=50, description="how many times to send the command")
+
+
+class SuiteArg(BaseModel):
+    suite: str = Field(description="test suite name, e.g. 'smoke' or 'spec-calc'")
+
+
+class SaveSuiteArgs(BaseModel):
+    name: str = Field(description="suite name: lower-case letters, digits, '_' or '-'")
+    description: str = Field("", max_length=300)
+    project: Optional[str] = Field(None, description="the firmware project the suite tests")
+    cases: List[TestCase] = Field(min_length=1, max_length=100)
+    replace: bool = Field(False, description="replace the cases of an existing suite (not a built-in one)")
+
+
+class AddCasesArgs(SuiteArg):
+    cases: List[TestCase] = Field(min_length=1, max_length=50)
+
+
+class RunSuiteArgs(SuiteArg):
+    repeat: int = Field(1, ge=1, le=20)
+
+
+class CompareArgs(BaseModel):
+    baseline_run_id: int = Field(ge=1, description="the older test run")
+    current_run_id: int = Field(ge=1, description="the newer test run")
+
+
+class RegressionArgs(SuiteArg):
+    build_id: Optional[int] = Field(None, ge=1, description="the build to check (default: newest build tested)")
+    baseline_build: Optional[int] = Field(None, ge=1, description="compare with this build (default: the one before)")
+
+
+class CoverageArgs(SuiteArg):
+    project: Optional[str] = Field(None, description="compare with this project's specification")
 
 
 # ---------------------------------------------------------------- JSON schema for the model (Gemini function declarations)
@@ -313,4 +347,32 @@ def build_registry(s) -> ToolRegistry:
     T(Tool("measure_latency", "Send one safe protocol command several times and measure the round-trip time "
            "(min / mean / median / p95 / max in ms).",
            LatencyArgs, "agent", "write", lambda s, p, a: s.analysis.measure_latency(a.command, a.count, _who(p))))
+
+    T(Tool("list_suites", "The stored test suites: name, project, number of cases, revision, built-in or not.",
+           NoArgs, "viewer", "read", lambda s, p, a: s.tests.suites_db.list()))
+    T(Tool("get_suite", "One test suite with all its cases.",
+           SuiteArg, "viewer", "read", lambda s, p, a: s.tests.suites_db.get(a.suite)))
+    T(Tool("save_suite", "Store a named test suite (cases: name, command, expect, optional wait_ms / retries) so it "
+           "can be run again on every new build. Built-in suites cannot be changed.",
+           SaveSuiteArgs, "agent", "write", _save_suite))
+    T(Tool("add_test_cases", "Add cases to a stored (not built-in) suite.",
+           AddCasesArgs, "agent", "write",
+           lambda s, p, a: s.tests.suites_db.add_cases(a.suite, [c.model_dump(exclude_none=True) for c in a.cases])))
+    T(Tool("run_suite", "Run a stored suite on the board as a job; the run records which build the board runs.",
+           RunSuiteArgs, "agent", "write",
+           lambda s, p, a: s.tests.start(RunRequest(suite=a.suite, repeat=a.repeat), _who(p))))
+    T(Tool("compare_test_runs", "Compare two test runs case by case: regressed, fixed, still failing, added, removed.",
+           CompareArgs, "viewer", "read", lambda s, p, a: s.tests.compare(a.baseline_run_id, a.current_run_id)))
+    T(Tool("suite_regression", "Did a build break anything? The suite's latest run on that build against its latest "
+           "run on the build before.",
+           RegressionArgs, "viewer", "read",
+           lambda s, p, a: s.tests.regression(a.suite, a.build_id, a.baseline_build)))
+    T(Tool("suite_coverage", "What a suite covers: protocol commands, error codes, APP sub-commands, and the share of "
+           "the project's specification examples.",
+           CoverageArgs, "viewer", "read", lambda s, p, a: s.tests.coverage(a.suite, a.project)))
     return r
+
+
+def _save_suite(s, p, a: SaveSuiteArgs):
+    return s.tests.suites_db.create(a.name, [c.model_dump(exclude_none=True) for c in a.cases], _who(p),
+                                    a.description, a.project, source="agent", replace=a.replace)

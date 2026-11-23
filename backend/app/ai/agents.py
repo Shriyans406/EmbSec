@@ -103,7 +103,8 @@ TEAM: Dict[str, AgentSpec] = {s.name: s for s in [
               report_prompt="specialist_report", report_schema=PERFORMANCE_SCHEMA),
     AgentSpec("verification", "verification_agent",
               ["device_status", "device_command", "run_tests", "get_test_run", "list_test_runs"] + JOBS
-              + READ_BUILDS + ["deployment_history"],
+              + READ_BUILDS + ["deployment_history", "list_suites", "get_suite", "save_suite", "add_test_cases",
+                               "run_suite", "compare_test_runs", "suite_regression", "suite_coverage"],
               "independently checks behaviour on the board (cannot change code)", max_steps=14,
               report_prompt="specialist_report", report_schema=VERIFICATION_SCHEMA),
 ]}

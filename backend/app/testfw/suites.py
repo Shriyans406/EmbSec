@@ -118,6 +118,20 @@ class SuiteStore:
             self._insert_cases(c, sid, checked, 0, now)
         return self.get(sid)
 
+    def sync(self, name: str, cases: List[dict], created_by: str, description: str = "",
+             project: Optional[str] = None, source: str = "spec") -> dict:
+        """Create the suite, or replace its cases only if they really changed (so the revision - and with it the
+        fairness of regression comparisons - stays the same when nothing changed)."""
+        want = _check_cases(cases)
+        try:
+            cur = self.get(name)
+        except ApiError:
+            cur = None
+        if cur and [(c["name"], c["command"], c["expect"]) for c in cur["cases"]] == \
+                [(c["name"], c["command"], c["expect"]) for c in want]:
+            return cur
+        return self.create(name, cases, created_by, description, project, [source], source, replace=True)
+
     @staticmethod
     def _insert_cases(c, sid: int, cases: List[dict], start: int, now: str) -> None:
         for i, tc in enumerate(cases):

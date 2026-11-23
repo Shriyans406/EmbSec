@@ -27,7 +27,7 @@ from ..db import now_iso
 from ..errors import ApiError
 from ..jobs import AWAITING, JobContext, JobFailed
 from ..jobs import FINAL as JOB_FINAL
-from ..services.testing import RunRequest, TestCase
+from ..services.testing import RunRequest
 from .report import build_report, to_markdown, write_markdown
 from .spec import spec_cases, spec_for_coder, write_spec
 from .store import (BUILD, CODE, DEPLOYED, DONE, FAILED, FINAL, FINISHED, PROPOSE, QUEUED, REPORT, RUNNING, SCAN,
@@ -233,18 +233,24 @@ class PipelineEngine:
         raise StageFailed(f"the deployment failed: {job.get('error')}")
 
     def stage_test(self, p: dict, log_fn) -> str:
-        cases = spec_cases(p["spec"])
-        cases.insert(1, {"name": "runs the new build", "command": "VERSION",
-                         "expect": {"contains": f"build={p['build_id']} "}})
-        req = RunRequest(cases=[TestCase(**c) for c in cases[:50]], name=f"pipeline {p['id']} spec")
+        # the spec's examples are kept as a stored suite, so every later build of the project can be compared
+        # against the same checks (regression)
+        suite_name = f"spec-{p['project']}".replace("_", "-")[:48]
+        suite = self.s.tests.suites_db.sync(suite_name, spec_cases(p["spec"])[:100], f"pipeline:{p['id']}",
+                                            f"checks from the specification of {p['project']}", p["project"])
+        req = RunRequest(suite=suite["name"], name=f"pipeline {p['id']} spec")
         job = self.s.jobs.wait(self.s.tests.start(req, f"pipeline:{p['id']}")["id"], 600)
         res = job.get("result") or {}
         self.store.update(p["id"], test_run_id=res.get("run_id"))
-        tests = {"run_id": res.get("run_id"), "total": res.get("total"), "passed": res.get("passed"),
-                 "failed": res.get("failed"), "aborted": res.get("aborted")}
+        tests = {"run_id": res.get("run_id"), "suite": suite["name"], "total": res.get("total"),
+                 "passed": res.get("passed"), "failed": res.get("failed"), "aborted": res.get("aborted"),
+                 "board_build": (res.get("firmware") or {}).get("build_id")}
         self.store.set_state(p["id"], tests=p["state"].get("tests", []) + [tests])
         if res.get("aborted") or not res:
             raise StageFailed(f"the tests could not run: {job.get('error')}")
+        if tests["board_build"] != p["build_id"]:
+            raise StageFailed(f"the board runs build #{tests['board_build']}, not build #{p['build_id']}; the "
+                              f"results do not belong to this pipeline", outcome="tests_failed")
         bad = [c for c in res["cases"] if not c["passed"]]
         if not bad:
             self._event(p, "done", f"all {res['total']} checks passed on the board", tests, log_fn)
@@ -252,7 +258,7 @@ class PipelineEngine:
         self._event(p, "warning", f"{len(bad)} of {res['total']} checks failed on the board",
                     {"failed": [{k: c[k] for k in ("name", "command", "reply", "why")} for c in bad[:20]]}, log_fn)
         rounds, limit = p["test_rounds"] + 1, p["params"].get("max_test_rounds", 1)
-        if rounds > limit or any(c["name"] in ("harness still answers", "runs the new build") for c in bad):
+        if rounds > limit or any(c["name"] == "harness still answers" for c in bad):
             raise StageFailed(f"{len(bad)} of {res['total']} checks failed on the board", outcome="tests_failed")
         self.store.update(p["id"], test_rounds=rounds)
         text = "\n".join(f"- {c['command']!r}: got {c['reply']!r}, {c['why']}" for c in bad[:20])
