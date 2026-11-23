@@ -280,7 +280,8 @@ class JobManager:
         except Exception as e:  # noqa: BLE001
             status, error = FAILED, f"{type(e).__name__}: {e}"
             log.error("job %s (%s) crashed:\n%s", job_id, kind, traceback.format_exc())
+        # the last log line first: whoever sees the final status must also find the complete log
+        self._append_log(job_id, f"finished: {status}" + (f" - {error}" if error else ""))
         with connect(self.db_path) as c:
             c.execute("UPDATE jobs SET status=?, result_json=?, error=?, finished_at=? WHERE id=?",
                       (status, _dump(result) if result is not None else None, error, now_iso(), job_id))
-        self._append_log(job_id, f"finished: {status}" + (f" - {error}" if error else ""))

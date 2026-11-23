@@ -23,16 +23,31 @@ class Expect(BaseModel):
     prefix: Optional[str] = Field(None, description="the reply must start with this")
     contains: Optional[str] = Field(None, description="the reply must contain this text")
     regex: Optional[str] = Field(None, description="the reply must match this regular expression")
+    not_contains: Optional[str] = Field(None, description="the reply must NOT contain this text")
+    field: Optional[str] = Field(None, description="a key=value field of the reply to check, e.g. 'uptime_ms'")
+    field_equals: Optional[str] = Field(None, description="the field's value must be exactly this")
+    min: Optional[float] = Field(None, description="the field's value must be a number >= this")
+    max: Optional[float] = Field(None, description="the field's value must be a number <= this")
+    max_latency_ms: Optional[float] = Field(None, gt=0, le=10000, description="the reply must come within this time")
 
     @model_validator(mode="after")
     def _at_least_one(self):
-        if not any(v is not None for v in (self.equals, self.prefix, self.contains, self.regex)):
-            raise ValueError("give at least one of: equals, prefix, contains, regex")
+        checks = (self.equals, self.prefix, self.contains, self.regex, self.not_contains, self.field,
+                  self.max_latency_ms)
+        if not any(v is not None for v in checks):
+            raise ValueError("give at least one of: equals, prefix, contains, regex, not_contains, field, "
+                             "max_latency_ms")
         if self.regex is not None:
             try:
                 re.compile(self.regex)
             except re.error as e:
                 raise ValueError(f"bad regular expression: {e}")
+        if (self.field_equals is not None or self.min is not None or self.max is not None) and not self.field:
+            raise ValueError("field_equals / min / max need 'field'")
+        if self.field and self.field_equals is None and self.min is None and self.max is None:
+            raise ValueError("'field' needs field_equals, min or max")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("min is larger than max")
         return self
 
 
@@ -41,6 +56,8 @@ class TestCase(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     command: str = Field(min_length=1, max_length=120)
     expect: Expect
+    wait_ms: int = Field(0, ge=0, le=5000, description="wait this long before sending (e.g. let a blink run)")
+    retries: int = Field(0, ge=0, le=3, description="send again this many times if the check fails (marks it flaky)")
 
 
 class RunRequest(BaseModel):
@@ -68,7 +85,7 @@ SUITES = {
             _c("ping", "PING", equals="OK PONG"),
             _c("version", "VERSION", regex=r"^OK VERSION fw=\S+ proto=1 sdk=\S+ build=\d+ src=\S+$"),
             _c("info", "INFO", prefix="OK INFO name=AEISP-DEV"),
-            _c("status", "STATUS", prefix="OK STATUS uptime_ms="),
+            _c("status", "STATUS", prefix="OK STATUS uptime_ms=", field="errors", min=0),
             _c("echo", "ECHO hello", equals="OK hello"),
             _c("unknown command rejected", "NOPE", prefix="ERR 1 UNKNOWN_CMD"),
             _c("extra argument rejected", "PING now", prefix="ERR 2 BAD_ARGS"),
@@ -82,7 +99,12 @@ SUITES = {
 }
 
 
-def evaluate(reply: Optional[str], expect: dict) -> Tuple[bool, str]:
+def reply_fields(reply: str) -> dict:
+    """key=value pairs of a reply line ("OK STATUS uptime_ms=5 led=OFF" -> {"uptime_ms": "5", "led": "OFF"})."""
+    return dict(re.findall(r"([A-Za-z_][\w.]*)=(\S+)", reply or ""))
+
+
+def evaluate(reply: Optional[str], expect: dict, latency_ms: Optional[float] = None) -> Tuple[bool, str]:
     """(passed, why-not). `reply` is None if the board did not answer."""
     if reply is None:
         return False, "no reply"
@@ -92,8 +114,28 @@ def evaluate(reply: Optional[str], expect: dict) -> Tuple[bool, str]:
         return False, f"expected it to start with {expect['prefix']!r}"
     if expect.get("contains") is not None and expect["contains"] not in reply:
         return False, f"expected it to contain {expect['contains']!r}"
+    if expect.get("not_contains") is not None and expect["not_contains"] in reply:
+        return False, f"expected it NOT to contain {expect['not_contains']!r}"
     if expect.get("regex") is not None and not re.search(expect["regex"], reply):
         return False, f"expected it to match /{expect['regex']}/"
+    if expect.get("field"):
+        name = expect["field"]
+        value = reply_fields(reply).get(name)
+        if value is None:
+            return False, f"the reply has no field {name!r}"
+        if expect.get("field_equals") is not None and value != expect["field_equals"]:
+            return False, f"expected {name}={expect['field_equals']!r}, got {value!r}"
+        if expect.get("min") is not None or expect.get("max") is not None:
+            try:
+                number = float(value)
+            except ValueError:
+                return False, f"{name}={value!r} is not a number"
+            if expect.get("min") is not None and number < expect["min"]:
+                return False, f"{name}={value} is below {expect['min']:g}"
+            if expect.get("max") is not None and number > expect["max"]:
+                return False, f"{name}={value} is above {expect['max']:g}"
+    if expect.get("max_latency_ms") is not None and latency_ms is not None and latency_ms > expect["max_latency_ms"]:
+        return False, f"took {latency_ms:.1f} ms, more than {expect['max_latency_ms']:g} ms"
     return True, ""
 
 
@@ -161,20 +203,28 @@ class TestService:
                         f"src {firmware.get('src_hash')}")
             for rep in range(p["repeat"]):
                 for c in p["cases"]:
-                    t0 = time.perf_counter()
-                    reply, err = None, ""
-                    try:
-                        reply = send(c["command"])
-                    except LinkError as e:
-                        err = str(e)
-                    ms = round((time.perf_counter() - t0) * 1000, 1)
-                    ok, why = evaluate(reply, c["expect"])
-                    if err:
-                        why = err
+                    if c.get("wait_ms"):
+                        time.sleep(c["wait_ms"] / 1000)
+                    attempts, ok, why, reply, err, ms = 0, False, "", None, "", 0.0
+                    while attempts <= int(c.get("retries") or 0):
+                        attempts += 1
+                        t0 = time.perf_counter()
+                        reply, err = None, ""
+                        try:
+                            reply = send(c["command"])
+                        except LinkError as e:
+                            err = str(e)
+                        ms = round((time.perf_counter() - t0) * 1000, 1)
+                        ok, why = evaluate(reply, c["expect"], ms)
+                        if err:
+                            why = err
+                        if ok or err:
+                            break
                     passed += ok
                     failed += (not ok)
                     results.append({"repeat": rep + 1, "name": c["name"], "command": c["command"], "reply": reply,
-                                    "passed": ok, "why": why, "latency_ms": ms})
+                                    "passed": ok, "why": why, "latency_ms": ms, "attempts": attempts,
+                                    "flaky": ok and attempts > 1})
                     ctx.log(f"{'PASS' if ok else 'FAIL'}  {c['name']}: {c['command']!r} -> {reply!r}"
                             + (f"   ({why})" if not ok else ""))
                     if err:  # the board is gone; the remaining checks cannot run
@@ -185,7 +235,7 @@ class TestService:
         total = passed + failed
         duration_ms = int((time.perf_counter() - t_start) * 1000)
         out = {"name": p["name"], "total": total, "passed": passed, "failed": failed, "aborted": aborted,
-               "suite_id": p.get("suite_id"), "suite_revision": p.get("suite_revision"), "firmware": firmware,
+               "flaky": sum(1 for r in results if r["flaky"]), "suite_id": p.get("suite_id"), "suite_revision": p.get("suite_revision"), "firmware": firmware,
                "duration_ms": duration_ms, "cases": results}
         with connect(self.db_path) as c:
             cur = c.execute("INSERT INTO test_runs (job_id, name, passed, failed, total, started_at, finished_at, "
