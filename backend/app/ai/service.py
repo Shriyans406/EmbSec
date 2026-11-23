@@ -91,11 +91,15 @@ class AgentService:
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self.checkpointer = SqliteSaver(self._conn)
         self._lock = threading.Lock()
-        self.store.recover_orphans()
         jobs.register("agent_run", self._run_job, "ai")
         jobs.register("agent_resume", self._resume_job, "ai")
 
     # ------------------------------------------------------------ setup
+    def recover(self) -> int:
+        """Called once when the server starts (never when the object is only built: importing the app must not
+        change the database). Runs that were active when the server stopped cannot continue."""
+        return self.store.recover_orphans()
+
     def register(self, spec: AgentSpec) -> None:
         self.specs[spec.name] = spec
 

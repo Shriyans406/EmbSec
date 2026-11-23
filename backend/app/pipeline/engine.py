@@ -50,11 +50,14 @@ class PipelineEngine:
         self.s = services
         self.settings = settings
         self.store = PipelineStore(settings.db_path)
-        self.store.recover_orphans()
         self.handlers = {SPEC: self.stage_spec, CODE: self.stage_code, BUILD: self.stage_build,
                          SCAN: self.stage_scan, PROPOSE: self.stage_propose, DEPLOYED: self.stage_deployed,
                          TEST: self.stage_test, REPORT: self.stage_report}
         services.jobs.register("pipeline", self._run_job, "ai")
+
+    def recover(self) -> int:
+        """Called when the server starts: pipelines that were running then cannot continue by themselves."""
+        return self.store.recover_orphans()
 
     # ------------------------------------------------------------ starting
     def start(self, requirement: str, requested_by: str, max_fix_rounds: int = 3, deploy: bool = True,

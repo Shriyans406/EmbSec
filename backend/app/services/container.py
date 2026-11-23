@@ -40,6 +40,12 @@ class Services:
     pipelines: Optional["PipelineEngine"] = None
 
     def start(self) -> None:
+        # orphan recovery first (before any worker runs), and only here: building the services must not change
+        # the database, because importing the app (tests, tools) builds them too
+        if self.agents:
+            self.agents.recover()
+        if self.pipelines:
+            self.pipelines.recover()
         self.jobs.start()
 
     def stop(self) -> None:

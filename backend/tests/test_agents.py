@@ -273,13 +273,21 @@ def test_written_sources_are_not_copied_into_the_steps(client, services):
     assert "SECRET_SAUCE" not in text and "<17 chars>" in text
 
 
-def test_orphaned_runs_are_failed_on_start(settings):
+def test_orphaned_runs_are_failed_on_start_but_not_when_only_built(settings):
+    from app.pipeline.store import PipelineStore
+
     build_services(settings)
-    store = RunStore(settings.db_path)
+    store, pipes = RunStore(settings.db_path), PipelineStore(settings.db_path)
     run = store.create("lab", "goal", "t", 5)
     store.update(run["id"], status="RUNNING")
-    build_services(settings)
-    assert store.get(run["id"])["status"] == "FAILED"
+    pipe = pipes.create("a requirement", "t", {})
+    pipes.update(pipe["id"], status="RUNNING")
+    build_services(settings)                       # e.g. importing the app: must not touch running work
+    assert store.get(run["id"])["status"] == "RUNNING" and pipes.get(pipe["id"])["status"] == "RUNNING"
+    s = build_services(settings)
+    s.start()
+    s.stop()
+    assert store.get(run["id"])["status"] == "FAILED" and pipes.get(pipe["id"])["status"] == "FAILED"
 
 
 # ------------------------------------------------------------------ pieces
