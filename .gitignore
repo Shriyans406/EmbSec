@@ -23,6 +23,9 @@ firmware/workspace/*/build/
 # runtime data
 data/*.db
 data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/pipelines/
 data/logs/
 data/artifacts/
 

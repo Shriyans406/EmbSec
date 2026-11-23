@@ -101,34 +101,64 @@ class TestService:
     __test__ = False  # not a pytest class
 
     def __init__(self, db_path, jobs: JobManager, device: DeviceManager) -> None:
+        from ..testfw.suites import SuiteStore
+
         self.db_path = db_path
         self.jobs = jobs
         self.device = device
+        self.suites_db = SuiteStore(db_path)
+        self.suites_db.seed_builtin(SUITES)
         jobs.register("test", self._run, "board")
 
     def suites(self) -> dict:
-        return {k: {"description": v["description"], "cases": len(v["cases"])} for k, v in SUITES.items()}
+        return {s["name"]: {"description": s["description"], "cases": s["enabled_cases"], "builtin": s["builtin"],
+                            "project": s["project"], "revision": s["revision"]} for s in self.suites_db.list()}
 
     def start(self, req: RunRequest, requested_by: str) -> dict:
+        suite_id = revision = None
         if req.suite is not None:
-            if req.suite not in SUITES:
-                raise ApiError(404, "not_found", f"unknown suite {req.suite!r}; available: {', '.join(SUITES)}")
-            cases = SUITES[req.suite]["cases"]
-            name = req.name or req.suite
+            try:
+                suite = self.suites_db.get(req.suite, enabled_only=True)
+            except ApiError:
+                raise ApiError(404, "not_found", f"unknown suite {req.suite!r}; available: "
+                                                 f"{', '.join(self.suites())}")
+            cases = [{"name": c["name"], "command": c["command"], "expect": c["expect"]} for c in suite["cases"]]
+            if not cases:
+                raise ApiError(409, "empty_suite", f"suite {req.suite!r} has no enabled cases")
+            name, suite_id, revision = req.name or req.suite, suite["id"], suite["revision"]
+            builtin = suite["builtin"]
         else:
-            cases = [c.model_dump() for c in req.cases or []]
-            name = req.name or "custom checks"
-        if req.suite is None:                 # user-supplied checks: refuse dangerous commands before queueing.
-            for c in cases:                   # (built-in suites are our own trusted code and may send bad input on purpose)
+            cases = [c.model_dump(exclude_none=True) for c in req.cases or []]
+            name, builtin = req.name or "custom checks", False
+        if not builtin:                       # refuse dangerous commands before queueing (built-in suites are our
+            for c in cases:                   # own trusted code and may send bad input on purpose)
                 validate_command(c["command"], operator=False)
-        return self.jobs.submit("test", {"name": name, "cases": cases, "repeat": req.repeat}, requested_by,
+        return self.jobs.submit("test", {"name": name, "cases": cases, "repeat": req.repeat, "suite_id": suite_id,
+                                         "suite_revision": revision}, requested_by,
                                 summary=f"test run '{name}' ({len(cases)} checks x {req.repeat})")
+
+    @staticmethod
+    def _firmware(send) -> dict:
+        """What the board runs, from VERSION: fw version, build id and source hash (empty if it cannot be read)."""
+        try:
+            reply = send("VERSION")
+        except LinkError:
+            return {}
+        fields = dict(re.findall(r"(\w+)=(\S+)", reply or ""))
+        build = fields.get("build")
+        return {"fw_version": fields.get("fw"), "build_id": int(build) if build and build.isdigit() else None,
+                "src_hash": fields.get("src")}
 
     def _run(self, ctx: JobContext) -> dict:
         p = ctx.params
         started = now_iso()
+        t_start = time.perf_counter()
         results, passed, failed, aborted = [], 0, 0, False
         with self.device.session(f"test job #{ctx.job_id}") as send:
+            firmware = self._firmware(send)
+            if firmware:
+                ctx.log(f"board runs fw {firmware.get('fw_version')} build #{firmware.get('build_id')} "
+                        f"src {firmware.get('src_hash')}")
             for rep in range(p["repeat"]):
                 for c in p["cases"]:
                     t0 = time.perf_counter()
@@ -153,12 +183,17 @@ class TestService:
                 if aborted:
                     break
         total = passed + failed
+        duration_ms = int((time.perf_counter() - t_start) * 1000)
         out = {"name": p["name"], "total": total, "passed": passed, "failed": failed, "aborted": aborted,
-               "cases": results}
+               "suite_id": p.get("suite_id"), "suite_revision": p.get("suite_revision"), "firmware": firmware,
+               "duration_ms": duration_ms, "cases": results}
         with connect(self.db_path) as c:
             cur = c.execute("INSERT INTO test_runs (job_id, name, passed, failed, total, started_at, finished_at, "
-                            "result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                            (ctx.job_id, p["name"], passed, failed, total, started, now_iso(), json.dumps(out)))
+                            "result_json, suite_id, suite_revision, build_id, src_hash, fw_version, duration_ms) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (ctx.job_id, p["name"], passed, failed, total, started, now_iso(), json.dumps(out),
+                             p.get("suite_id"), p.get("suite_revision"), firmware.get("build_id"),
+                             firmware.get("src_hash"), firmware.get("fw_version"), duration_ms))
             out["run_id"] = int(cur.lastrowid)
         ctx.log(f"result: {passed} passed, {failed} failed" + (" (stopped early: the board stopped answering)" if aborted else ""))
         if aborted:
@@ -172,7 +207,8 @@ class TestService:
     # ------------------------------------------------------------ reading
     def list_runs(self, limit: int = 20) -> List[dict]:
         with connect(self.db_path) as c:
-            rows = c.execute("SELECT id, job_id, name, passed, failed, total, started_at, finished_at "
+            rows = c.execute("SELECT id, job_id, name, passed, failed, total, started_at, finished_at, suite_id, "
+                             "suite_revision, build_id, src_hash, fw_version, duration_ms "
                              "FROM test_runs ORDER BY id DESC LIMIT ?", (max(1, min(limit, 100)),)).fetchall()
         return [dict(r) for r in rows]
 

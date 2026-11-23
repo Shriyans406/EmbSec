@@ -153,6 +153,41 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         )""",
         "CREATE INDEX IF NOT EXISTS idx_pipeline_events ON pipeline_events (pipeline_id, id)",
     ]),
+    (7, "test_suites", [
+        """CREATE TABLE IF NOT EXISTS test_suites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            project TEXT,
+            tags TEXT,
+            builtin INTEGER NOT NULL DEFAULT 0,
+            source TEXT,
+            revision INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS test_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suite_id INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            command TEXT NOT NULL,
+            expect_json TEXT NOT NULL,
+            tags TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            UNIQUE (suite_id, name)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_test_cases_suite ON test_cases (suite_id, position)",
+        "ALTER TABLE test_runs ADD COLUMN suite_id INTEGER",
+        "ALTER TABLE test_runs ADD COLUMN suite_revision INTEGER",
+        "ALTER TABLE test_runs ADD COLUMN build_id INTEGER",
+        "ALTER TABLE test_runs ADD COLUMN src_hash TEXT",
+        "ALTER TABLE test_runs ADD COLUMN fw_version TEXT",
+        "ALTER TABLE test_runs ADD COLUMN duration_ms INTEGER",
+        "CREATE INDEX IF NOT EXISTS idx_test_runs_suite ON test_runs (suite_id, build_id)",
+    ]),
 ]
 
 

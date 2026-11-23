@@ -398,8 +398,8 @@ def test_run_stops_when_the_board_disappears_and_says_so(client):
     FakeLink.fail_after = 2
     job = wait_done(client, client.post("/tests/run", headers=auth("agent"), json={"suite": "smoke"}).json()["id"])
     assert job["status"] == "FAILED" and job["result"]["aborted"] is True
-    assert job["result"]["total"] == 3 and "link lost" in job["result"]["cases"][-1]["why"]
-    assert job["error"].startswith("the board stopped answering") and "3 of 13" in job["error"]
+    assert job["result"]["total"] == 2 and "link lost" in job["result"]["cases"][-1]["why"]
+    assert job["error"].startswith("the board stopped answering") and "2 of 13" in job["error"]
 
 
 def test_evaluate_rules():
