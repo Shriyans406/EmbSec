@@ -25,7 +25,7 @@ def test_board_is_visible_on_usb():
 
 def test_handshake(link):
     assert link.info.firmware == "AEISP-DEV"
-    assert link.info.version == "0.3.0"
+    assert link.info.version in ("0.3.0", "0.4.0")
     assert len(link.info.uid) == 16
 
 

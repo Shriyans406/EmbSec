@@ -323,7 +323,7 @@ def build_registry(s) -> ToolRegistry:
            NoArgs, "viewer", "read", lambda s, p, a: s.device.status(_who(p))))
     T(Tool("device_command",
            "Send ONE safe protocol command to the board and get its reply. Allowed: HELLO PING ECHO UPTIME VERSION "
-           "INFO STATUS LED BLINK TIMER TEMP RESETINFO APP. Cannot reboot, hang or flash the board.",
+           "INFO STATUS LED BLINK TIMER TEMP RESETINFO APP PROF. Cannot reboot, hang or flash the board.",
            CommandArgs, "agent", "write", lambda s, p, a: s.device.command(a.command, _who(p), operator=False)))
 
     T(Tool("list_projects", "List the firmware projects, their source files and their latest build.",

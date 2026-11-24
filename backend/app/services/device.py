@@ -23,7 +23,7 @@ log = logging.getLogger("aeisp.device")
 # Commands the API may send. BOOTSEL and HANG are deliberately NOT here: the bootloader is reached only through
 # the deployment tools (which have safeguards), and HANG exists only for manual testing in the terminal tool.
 SAFE_VERBS = {"HELLO", "PING", "ECHO", "UPTIME", "VERSION", "INFO", "STATUS", "LED", "BLINK", "TIMER", "TEMP",
-              "RESETINFO", "APP"}
+              "RESETINFO", "APP", "PROF"}
 OPERATOR_VERBS = {"REBOOT"}
 
 _VERB = re.compile(r"^(?:#\d{1,5}\s+)?([A-Z][A-Z0-9_]*)")

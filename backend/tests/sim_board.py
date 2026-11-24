@@ -11,10 +11,15 @@ Planted bugs
     slow_add         APP ADD takes 700 ms
     div_zero_dead    APP DIV a 0 kills the board for good (it never comes back on USB)
     no_line_timeout  an unfinished line is never answered with ERR 7
+    mul_slow         APP MUL takes 400 us on the board (instead of 40)
+    mul_fast         APP MUL takes 12 us on the board
+Harness 0.4.0 answers PROF with simulated, repeatable timings (COST below); 0.3.0 does not know PROF.
 `builds` maps a build id to the bugs that build has, so deploying a fixed build changes the behaviour.
 """
 import re
 import time
+
+COST = {"APP ADD": 35, "APP MUL": 40, "APP DIV": 60, "APP": 30}   # us per command, default 20
 
 from app.hardware.link import LinkTimeout, NotConnected
 from app.hardware.protocol import crc16
@@ -33,7 +38,7 @@ class Crash(Exception):
 
 
 class SimFirmware:
-    def __init__(self, bugs=(), build_id=1, src="aaaa1111", builds=None, clock=time.monotonic):
+    def __init__(self, bugs=(), build_id=1, src="aaaa1111", builds=None, clock=time.monotonic, fw="0.4.0"):
         self.builds = builds or {}
         self.clock = clock
         self.build_id, self.src = build_id, src
@@ -43,6 +48,8 @@ class SimFirmware:
         self.led, self.blink, self.cmds, self.errors = "OFF", 0, 0, 0
         self.hung = False
         self.dead = False
+        self.fw = fw
+        self.prof_reset()
         self.log = []
 
     # ------------------------------------------------------------ lifecycle
@@ -59,8 +66,56 @@ class SimFirmware:
     def uptime(self):
         return int((self.clock() - self.boot) * 1000)
 
+    # ------------------------------------------------------------ the on-device profiler (harness 0.4.0)
+    def prof_reset(self):
+        self.prof = {}
+        self.prof_start = self.clock()
+        self.rx_hwm = self.reply_hwm = 0
+
+    def cost_us(self, line):
+        words = line.split(" ")
+        key = " ".join(words[:2]) if words[0] == "APP" else words[0]
+        us = COST.get(key, COST.get(words[0], 20))
+        if key == "APP MUL" and "mul_slow" in self.bugs:
+            us = 400
+        if key == "APP MUL" and "mul_fast" in self.bugs:
+            us = 12
+        n = self.prof.get(words[0], (0, 0, 0, 0))[0]
+        return us + (n % 3)                                 # a little jitter, the same every run
+
+    def record(self, verb, us):
+        n, total, lo, hi = self.prof.get(verb, (0, 0, us, us))
+        self.prof[verb] = (n + 1, total + us, min(lo, us), max(hi, us))
+
+    def h_PROF(self, a):
+        if self.fw < "0.4.0":
+            return self._err(1, "unknown command PROF")
+        words = a.split()
+        if not words:
+            win_ms = int((self.clock() - self.prof_start) * 1000)
+            busy_us = sum(v[1] for v in self.prof.values())
+            pct = 0 if not win_ms else min(10000, busy_us * 10 // max(1, win_ms))
+            return (f"OK PROF window_ms={win_ms} loops={win_ms} busy_pct={pct // 100}.{pct % 100:02d} "
+                    f"loop_max_us={max([v[3] for v in self.prof.values()] or [0]) + 15} loop_avg_us=12 "
+                    f"tick_max_us=4 app_tick_avg_us=1 rx_hwm={self.rx_hwm} reply_hwm={self.reply_hwm}")
+        if words == ["RESET"]:
+            self.prof_reset()
+            return "OK PROF reset"
+        if len(words) == 2 and words[0] == "CMD":
+            n, total, lo, hi = self.prof.get(words[1], (0, 0, 0, 0))
+            return f"OK PROF cmd={words[1]} n={n} avg_us={total // n if n else 0} min_us={lo} max_us={hi}"
+        if len(words) == 2 and words[0] == "APP" and words[1].isdigit() and int(words[1]) < 8:
+            return f"OK PROF app={words[1]} name=- n=0 avg_us=0 min_us=0 max_us=0"
+        return self._err(2, "usage: PROF [CMD <name>|APP <slot>|RESET]")
+
     # ------------------------------------------------------------ protocol
     def handle(self, line):
+        reply = self._handle(line)
+        self.rx_hwm = max(self.rx_hwm, len(line))
+        self.reply_hwm = max(self.reply_hwm, len(reply))
+        return reply
+
+    def _handle(self, line):
         self.log.append(line)
         if len(line) > 128:
             return self._err(5, "line is longer than 128 characters")
@@ -83,8 +138,12 @@ class SimFirmware:
         verb, _, rest = line.partition(" ")
         h = getattr(self, f"h_{verb}", None) if verb.isupper() and verb.isalpha() else None
         if h is None:
-            return prefix + self._err(1, f"unknown command {verb[:16]}")
-        return prefix + h(rest)
+            return prefix + self._err(1)                     # like the harness: the verb is not echoed
+        us = self.cost_us(line)
+        out = h(rest)
+        if verb != "PROF" or rest.split()[:1] != ["RESET"]:
+            self.record(verb, us)
+        return prefix + out
 
     def _err(self, code, text=""):
         self.errors += 1
@@ -103,7 +162,7 @@ class SimFirmware:
         return f"OK UPTIME {self.uptime()}" if not a else self._err(2, "UPTIME takes no arguments")
 
     def h_VERSION(self, a):
-        return f"OK VERSION fw=0.3.0 proto=1 sdk=1.5.1 build={self.build_id} src={self.src}"
+        return f"OK VERSION fw={self.fw} proto=1 sdk=1.5.1 build={self.build_id} src={self.src}"
 
     def h_INFO(self, a):
         return "OK INFO name=AEISP-DEV fw=0.3.0 proto=1 uid=DE61C48787331A35 board=shrike-lite mcu=rp2040 clk_mhz=125"

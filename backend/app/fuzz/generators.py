@@ -34,7 +34,8 @@ ODD_NUMBERS = ["9223372036854775808", "-9223372036854775809", "99999999999999999
                "+5", "-0", "007", "1.5", "-", "+", "", "NaN", "inf", " 5", "5 "]
 
 DEFAULT_CORPUS = ["PING", "HELLO", "ECHO hello", "UPTIME", "VERSION", "INFO", "STATUS", "LED ON", "LED OFF",
-                  "LED GET", "LED TOGGLE", "BLINK 200", "BLINK 0", "TIMER 100", "TEMP", "RESETINFO", "APP"]
+                  "LED GET", "LED TOGGLE", "BLINK 200", "BLINK 0", "TIMER 100", "TEMP", "RESETINFO", "APP", "PROF", "PROF CMD PING",
+                  "PROF APP 0"]
 
 STATE_SEQUENCES = [
     ["LED ON", "LED GET", "LED OFF", "LED GET"],
