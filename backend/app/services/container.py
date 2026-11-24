@@ -14,6 +14,7 @@ from ..deploy.store import DeploymentStore
 from ..jobs import JobContext, JobFailed, JobManager
 from ..fuzz.engine import FuzzService
 from ..pipeline.engine import PipelineEngine
+from ..profiling.service import ProfilingService
 from ..remediate.engine import RemediationEngine
 from ..settings import Settings
 from ..tools import ToolRegistry, build_registry
@@ -42,6 +43,7 @@ class Services:
     pipelines: Optional["PipelineEngine"] = None
     fuzz: Optional["FuzzService"] = None
     remediations: Optional["RemediationEngine"] = None
+    profiling: Optional["ProfilingService"] = None
 
     def start(self) -> None:
         # orphan recovery first (before any worker runs), and only here: building the services must not change
@@ -90,6 +92,7 @@ def build_services(settings: Settings, llm_factory=None) -> Services:
     s.deploys = DeployService(cfg, jobs, device, audit)
     s.tests = TestService(settings.db_path, jobs, device)
     s.analysis = AnalysisService(cfg, s.firmware, device)
+    s.profiling = ProfilingService(settings.db_path, jobs, device, s.builds, s.tests)
     s.tools = build_registry(s)
     s.agents = AgentService(settings, jobs, s.tools, llm_factory)
     s.pipelines = PipelineEngine(s, settings)

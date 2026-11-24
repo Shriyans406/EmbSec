@@ -276,6 +276,35 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         )""",
         "CREATE INDEX IF NOT EXISTS idx_remediation_events ON remediation_events (remediation_id, id)",
     ]),
+    (10, "benchmarks", [
+        """CREATE TABLE IF NOT EXISTS benchmarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            project TEXT,
+            description TEXT,
+            definition_json TEXT NOT NULL,
+            builtin INTEGER NOT NULL DEFAULT 0,
+            baseline_run_id INTEGER,
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS benchmark_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            benchmark_id INTEGER NOT NULL,
+            job_id INTEGER,
+            build_id INTEGER,
+            src_hash TEXT,
+            fw_version TEXT,
+            device_timing INTEGER NOT NULL DEFAULT 0,
+            repeatable INTEGER NOT NULL DEFAULT 0,
+            flash_bytes INTEGER,
+            ram_bytes INTEGER,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_benchmark_runs ON benchmark_runs (benchmark_id, build_id)",
+    ]),
 ]
 
 
