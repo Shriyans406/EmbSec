@@ -23,6 +23,7 @@ from .api import device as api_device
 from .api import firmware as api_firmware
 from .api import fuzz as api_fuzz
 from .api import pipelines as api_pipelines
+from .api import profiling as api_profiling
 from .api import remediations as api_remediations
 from .api import testsuites as api_testsuites
 from .api import tools as api_tools
@@ -95,6 +96,7 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
     app.include_router(api_testsuites.router)
     app.include_router(api_fuzz.router)
     app.include_router(api_remediations.router)
+    app.include_router(api_profiling.router)
     return app
 
 

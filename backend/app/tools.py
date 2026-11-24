@@ -181,6 +181,38 @@ class RemediationArg(BaseModel):
     remediation_id: int = Field(ge=1)
 
 
+class BenchNameArg(BaseModel):
+    benchmark: str = Field(description="benchmark name, e.g. 'harness-basic' or 'bench-calc'")
+
+
+class BenchCommandArg(BaseModel):
+    name: str = Field(description="short name of the measurement")
+    command: str = Field(description="the protocol line to measure, e.g. 'APP MUL 2 3'")
+    repeat: int = Field(20, ge=1, le=100, description="sends per run")
+
+
+class SaveBenchmarkArgs(BaseModel):
+    name: str = Field(description="lower-case letters, digits, '_' or '-'")
+    project: Optional[str] = None
+    commands: List[BenchCommandArg] = Field(min_length=1, max_length=12)
+    runs: int = Field(5, ge=2, le=20, description="repetitions of the whole list (for the statistics)")
+    burst_command: Optional[str] = Field(None, description="command sent back-to-back to measure throughput")
+    replace: bool = False
+
+
+class BenchRunArg(BaseModel):
+    run_id: int = Field(ge=1)
+
+
+class CompareBenchArgs(BaseModel):
+    before_run_id: int = Field(ge=1)
+    after_run_id: int = Field(ge=1)
+
+
+class VsBaselineArgs(BenchNameArg):
+    run_id: Optional[int] = Field(None, ge=1, description="default: the latest run")
+
+
 class ReproArgs(FindingArg):
     attempts: int = Field(3, ge=1, le=10)
     minimise: bool = Field(True, description="shrink the input to the smallest one that still fails")
@@ -435,7 +467,33 @@ def build_registry(s) -> ToolRegistry:
            lambda s, p, a: s.remediations.start(a.finding_id, _who(p), a.max_fix_rounds)))
     T(Tool("get_remediation", "A remediation: stage, root cause, diff statistics, retest, regressions, outcome.",
            RemediationArg, "viewer", "read", lambda s, p, a: s.remediations.get(a.remediation_id)))
+
+    T(Tool("list_benchmarks", "The stored benchmarks and their baselines.",
+           NoArgs, "viewer", "read", lambda s, p, a: s.profiling.list()))
+    T(Tool("save_benchmark", "Store a benchmark: commands to time on the board (each sent `repeat` times per run, "
+           "`runs` runs), optionally a burst for throughput.",
+           SaveBenchmarkArgs, "agent", "write", _save_benchmark))
+    T(Tool("run_benchmark", "Run a benchmark on the board (a job): device-side microseconds from the harness profiler, "
+           "host round trips, throughput, loop / busy / buffer figures, flash / RAM - with median, p95 and CV.",
+           BenchNameArg, "agent", "write", lambda s, p, a: s.profiling.start(a.benchmark, _who(p))))
+    T(Tool("get_benchmark_run", "One benchmark run with all its numbers.",
+           BenchRunArg, "viewer", "read", lambda s, p, a: s.profiling.run(a.run_id)))
+    T(Tool("compare_benchmark_runs", "Compare two benchmark runs: better / worse / same per measurement, only counting "
+           "differences larger than the measured noise.",
+           CompareBenchArgs, "viewer", "read",
+           lambda s, p, a: s.profiling.compare(a.before_run_id, a.after_run_id)))
+    T(Tool("benchmark_vs_baseline", "A run of a benchmark (default: the latest) against its baseline.",
+           VsBaselineArgs, "viewer", "read", lambda s, p, a: s.profiling.against_baseline(a.benchmark, a.run_id)))
+    T(Tool("benchmark_history", "Every run of a benchmark, newest first, with the build it ran on.",
+           BenchNameArg, "viewer", "read", lambda s, p, a: s.profiling.history(a.benchmark)))
     return r
+
+
+def _save_benchmark(s, p, a: SaveBenchmarkArgs):
+    d = {"name": a.name, "project": a.project, "commands": [c.model_dump() for c in a.commands], "runs": a.runs}
+    if a.burst_command:
+        d["burst"] = {"command": a.burst_command, "count": 50}
+    return s.profiling.save({k: v for k, v in d.items() if v is not None}, _who(p), a.replace)
 
 
 def _save_suite(s, p, a: SaveSuiteArgs):

@@ -18,6 +18,8 @@ from .graph import LAB_AGENT, REPORT_SCHEMA, AgentSpec
 READ_CODE = ["list_projects", "list_sources", "read_source"]
 READ_BUILDS = ["get_build", "build_history"]
 JOBS = ["get_job", "get_job_logs", "wait_for_job"]
+BENCH = ["list_benchmarks", "save_benchmark", "run_benchmark", "get_benchmark_run",
+         "compare_benchmark_runs", "benchmark_vs_baseline", "benchmark_history"]
 FUZZ = ["start_fuzz", "get_fuzz_campaign", "list_fuzz_findings", "get_fuzz_finding", "reproduce_finding"]
 
 
@@ -106,8 +108,8 @@ TEAM: Dict[str, AgentSpec] = {s.name: s for s in [
               report_prompt="specialist_report", report_schema=SECURITY_SCHEMA),
     AgentSpec("performance", "performance_agent",
               ["list_sources", "read_source"] + READ_BUILDS + ["size_report", "measure_latency", "device_status",
-                                                               "device_command"],
-              "measures size and latency (read-only)", max_steps=10,
+                                                               "device_command"] + BENCH + JOBS,
+              "measures size, speed and load on the board (cannot change code)", max_steps=14,
               report_prompt="specialist_report", report_schema=PERFORMANCE_SCHEMA),
     AgentSpec("debugger", "debug_agent",
               READ_CODE + ["write_source", "security_scan", "get_fuzz_finding", "list_fuzz_findings"] + READ_BUILDS,
