@@ -23,7 +23,8 @@ from ..fuzz.engine import Board, DEFAULT_BUDGET
 from ..fuzz.repro import reproduce
 from ..jobs import JobContext, JobFailed
 from ..services.testing import RunRequest
-from .store import (DONE, FAILED, FINAL, FINISHED, INSPECT, QUEUED, REPORT, REPRODUCE, RUNNING, STOPPED,
+from .fixer import code_diff, debug_task, root_cause_of
+from .store import (DONE, FAILED, FINAL, FINISHED, FIX, INSPECT, QUEUED, REPORT, REPRODUCE, RUNNING, STOPPED,
                     RemediationStore)
 
 log = logging.getLogger("aeisp.remediate")
@@ -43,6 +44,7 @@ class RemediationEngine:
         self.recover_s: Optional[float] = None
         self.sleep = None
         self.handlers: Dict[str, Callable] = {REPRODUCE: self.stage_reproduce, INSPECT: self.stage_inspect,
+                                              FIX: self.stage_fix,
                                               REPORT: self.stage_report}
         services.jobs.register("remediation", self._run_job, "ai")
 
@@ -179,6 +181,33 @@ class RemediationEngine:
         return self.after_inspect(r)
 
     def after_inspect(self, r: dict) -> str:
+        return FIX
+
+    # ------------------------------------------------------------ fix: root cause, patch, diff
+    def stage_fix(self, r: dict, log_fn) -> str:
+        state = r["state"]
+        task = debug_task(state["evidence"], r["project"], r["before_build"], state.get("retry_note"))
+        res = self.s.agents.run_inline("debugger", task, f"remediation:{r['id']}", {"remediation_id": r["id"]}, log_fn)
+        runs = state.get("agent_runs", []) + [{"run_id": res["child_run_id"], "outcome": res["outcome"],
+                                               "tokens": res.get("tokens", 0)}]
+        self.store.set_state(r["id"], agent_runs=runs, retry_note=None)
+        if res["status"] == "FAILED" or (res.get("error") or "").startswith("the model failed"):
+            raise StageFailed(f"the debugger agent could not work: {(res.get('error') or '')[:300]}")
+        before = self.s.analysis.build_sources(r["before_build"])
+        after = self.s.analysis.project_sources(r["project"])
+        diff = code_diff({k: v for k, v in before.items() if k.endswith((".c", ".h"))}, after)
+        cause = root_cause_of(res)
+        self.store.update(r["id"], diff_text=diff["diff"], root_cause=cause)
+        self.store.set_state(r["id"], diff_stats={k: diff[k] for k in ("files", "added", "removed")},
+                             debugger_report=res.get("report"))
+        if not diff["files"]:
+            raise StageFailed("the debugger agent did not change any code", "no_fix")
+        self.event(r, "done", f"debugger run {res['child_run_id']}: {', '.join(diff['files'])} changed "
+                              f"(+{diff['added']} -{diff['removed']}); root cause: {cause[:160]}",
+                   {"root_cause": cause, "diff": diff["diff"][:4000]}, log_fn)
+        return self.after_fix(r)
+
+    def after_fix(self, r: dict) -> str:
         return REPORT
 
     # ------------------------------------------------------------ report

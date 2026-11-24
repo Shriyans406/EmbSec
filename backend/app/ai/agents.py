@@ -75,6 +75,13 @@ FIRMWARE_SCHEMA = _schema({
     "scan_verdict": {"type": "string", "description": "PASS / FAIL of the last security_scan, or 'not run'"},
 }, ["files_written", "commands", "scan_verdict"])
 
+DEBUG_SCHEMA = _schema({
+    "root_cause": {"type": "string", "description": "file, line and mechanism of the bug"},
+    "fix": {"type": "string", "description": "what was changed and why it removes the cause"},
+    "files_written": {"type": "array", "items": {"type": "string"}},
+    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+}, ["root_cause", "fix", "files_written", "confidence"])
+
 SUPERVISOR = AgentSpec(
     "supervisor", "supervisor",
     ["list_projects", "list_sources", "build_history", "get_build", "deployment_history", "list_test_runs",
@@ -102,6 +109,10 @@ TEAM: Dict[str, AgentSpec] = {s.name: s for s in [
                                                                "device_command"],
               "measures size and latency (read-only)", max_steps=10,
               report_prompt="specialist_report", report_schema=PERFORMANCE_SCHEMA),
+    AgentSpec("debugger", "debug_agent",
+              READ_CODE + ["write_source", "security_scan", "get_fuzz_finding", "list_fuzz_findings"] + READ_BUILDS,
+              "finds the root cause of a reproduced bug and patches it", max_steps=16,
+              report_prompt="specialist_report", report_schema=DEBUG_SCHEMA),
     AgentSpec("verification", "verification_agent",
               ["device_status", "device_command", "run_tests", "get_test_run", "list_test_runs"] + JOBS
               + READ_BUILDS + ["deployment_history", "list_suites", "get_suite", "save_suite", "add_test_cases",
@@ -111,7 +122,7 @@ TEAM: Dict[str, AgentSpec] = {s.name: s for s in [
 ]}
 
 SPECIALISTS = [n for n in TEAM if n != "supervisor"]
-WRITERS = {"firmware"}                  # the only agent that may change code
+WRITERS = {"firmware", "debugger"}      # the only agents that may change code
 
 
 def all_specs() -> Dict[str, AgentSpec]:

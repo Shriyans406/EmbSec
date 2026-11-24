@@ -34,10 +34,10 @@ def test_every_listed_tool_exists_and_only_the_firmware_agent_writes(services):
     for spec in TEAM.values():
         assert set(spec.tools) <= names, spec.name
     writers = {n for n, s in TEAM.items() if {"write_source", "delete_source", "restore_sources"} & set(s.tools)}
-    assert writers == WRITERS == {"firmware"}
+    assert writers == WRITERS == {"firmware", "debugger"}
     assert not {"start_build", "propose_deployment", "write_source"} & set(TEAM["verification"].tools)
     assert not {"propose_deployment", "propose_recovery"} & set(TEAM["supervisor"].tools)
-    assert set(SPECIALISTS) == {"firmware", "build", "security", "performance", "verification"}
+    assert set(SPECIALISTS) == {"firmware", "build", "security", "performance", "verification", "debugger"}
 
 
 # ------------------------------------------------------------------ delegation
