@@ -146,6 +146,38 @@ class CoverageArgs(SuiteArg):
     project: Optional[str] = Field(None, description="compare with this project's specification")
 
 
+FuzzFamily = Literal["boundary", "overflow", "mutation", "malformed", "oversize", "invalid", "state", "timeout"]
+
+
+class FuzzArgs(BaseModel):
+    project: Optional[str] = Field(None, description="use this project's specification and suites as the corpus")
+    families: Optional[List[FuzzFamily]] = Field(None, description="which kinds of input (default: all)")
+    seed: Optional[int] = Field(None, ge=0, description="the same seed gives the same inputs")
+    max_inputs: int = Field(200, ge=1, le=500)
+    max_seconds: int = Field(300, ge=1, le=600)
+    max_resets: int = Field(3, ge=0, le=3, description="stop after the board restarted this often")
+
+
+class CampaignArg(BaseModel):
+    campaign_id: int = Field(ge=1)
+
+
+class FindingsArgs(BaseModel):
+    project: Optional[str] = None
+    campaign_id: Optional[int] = Field(None, ge=1)
+    status: Optional[Literal["open", "reproduced", "flaky", "not_reproduced", "fixed", "wont_fix"]] = None
+    min_severity: Optional[Literal["critical", "high", "medium", "low", "info"]] = None
+
+
+class FindingArg(BaseModel):
+    finding_id: int = Field(ge=1)
+
+
+class ReproArgs(FindingArg):
+    attempts: int = Field(3, ge=1, le=10)
+    minimise: bool = Field(True, description="shrink the input to the smallest one that still fails")
+
+
 # ---------------------------------------------------------------- JSON schema for the model (Gemini function declarations)
 def _clean(schema: dict) -> dict:
     """Reduce a pydantic JSON schema to the simple subset function-calling APIs accept."""
@@ -370,6 +402,24 @@ def build_registry(s) -> ToolRegistry:
     T(Tool("suite_coverage", "What a suite covers: protocol commands, error codes, APP sub-commands, and the share of "
            "the project's specification examples.",
            CoverageArgs, "viewer", "read", lambda s, p, a: s.tests.coverage(a.suite, a.project)))
+
+    T(Tool("start_fuzz", "Start a fuzz campaign against the board (a job): boundary, overflow, mutated, malformed, "
+           "oversized and invalid input, state sequences and unfinished lines. The board may restart; budgets "
+           "limit inputs, time and restarts. Never sends bootloader, hang or reboot commands.",
+           FuzzArgs, "agent", "write",
+           lambda s, p, a: s.fuzz.start(_who(p), a.project, a.families, a.seed, max_inputs=a.max_inputs,
+                                        max_seconds=a.max_seconds, max_resets=a.max_resets)))
+    T(Tool("get_fuzz_campaign", "A fuzz campaign: progress, budget, anomalies, restarts and its findings.",
+           CampaignArg, "viewer", "read", lambda s, p, a: s.fuzz.campaign(a.campaign_id)))
+    T(Tool("list_fuzz_findings", "Fuzz findings (most severe first): kind, severity, CWE class, input, reply, status.",
+           FindingsArgs, "viewer", "read",
+           lambda s, p, a: s.fuzz.store.findings(a.campaign_id, a.status, a.min_severity, a.project)))
+    T(Tool("get_fuzz_finding", "One fuzz finding with its reproductions and minimised input.",
+           FindingArg, "viewer", "read", lambda s, p, a: s.fuzz.finding(a.finding_id)))
+    T(Tool("reproduce_finding", "Send a finding's input again (a job) to see whether it still fails on the build "
+           "that is on the board, and shrink it to the smallest failing input.",
+           ReproArgs, "agent", "write",
+           lambda s, p, a: s.fuzz.start_reproduce(a.finding_id, _who(p), a.attempts, a.minimise)))
     return r
 
 

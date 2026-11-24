@@ -21,6 +21,7 @@ from .api import core as api_core
 from .api import deployments as api_deployments
 from .api import device as api_device
 from .api import firmware as api_firmware
+from .api import fuzz as api_fuzz
 from .api import pipelines as api_pipelines
 from .api import testsuites as api_testsuites
 from .api import tools as api_tools
@@ -91,6 +92,7 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
     app.include_router(api_agents.router)
     app.include_router(api_pipelines.router)
     app.include_router(api_testsuites.router)
+    app.include_router(api_fuzz.router)
     return app
 
 

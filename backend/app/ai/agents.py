@@ -18,6 +18,7 @@ from .graph import LAB_AGENT, REPORT_SCHEMA, AgentSpec
 READ_CODE = ["list_projects", "list_sources", "read_source"]
 READ_BUILDS = ["get_build", "build_history"]
 JOBS = ["get_job", "get_job_logs", "wait_for_job"]
+FUZZ = ["start_fuzz", "get_fuzz_campaign", "list_fuzz_findings", "get_fuzz_finding", "reproduce_finding"]
 
 
 def _schema(extra: dict, required: list) -> dict:
@@ -93,8 +94,8 @@ TEAM: Dict[str, AgentSpec] = {s.name: s for s in [
                  "device_command"],
               "builds, proposes deployments and checks the running build", max_steps=12,
               report_prompt="specialist_report", report_schema=BUILD_SCHEMA),
-    AgentSpec("security", "security_agent", READ_CODE + READ_BUILDS + ["security_scan"],
-              "reviews code for security and safety (read-only)", max_steps=10,
+    AgentSpec("security", "security_agent", READ_CODE + READ_BUILDS + ["security_scan"] + FUZZ + JOBS,
+              "reviews code and fuzzes the board for security problems (cannot change code)", max_steps=14,
               report_prompt="specialist_report", report_schema=SECURITY_SCHEMA),
     AgentSpec("performance", "performance_agent",
               ["list_sources", "read_source"] + READ_BUILDS + ["size_report", "measure_latency", "device_status",

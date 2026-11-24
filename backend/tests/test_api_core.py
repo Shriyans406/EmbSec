@@ -24,7 +24,7 @@ def test_health_is_public(client):
     r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
-    assert body["status"] == "ok" and body["phase"] == 9 and body["auth_configured"] is True
+    assert body["status"] == "ok" and body["phase"] == 10 and body["auth_configured"] is True
     assert "X-Request-ID" in r.headers
 
 
