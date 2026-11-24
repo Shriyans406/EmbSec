@@ -13,6 +13,7 @@ Planted bugs
     no_line_timeout  an unfinished line is never answered with ERR 7
     mul_slow         APP MUL takes 400 us on the board (instead of 40)
     mul_fast         APP MUL takes 12 us on the board
+    mul_noisy        APP MUL takes 40..100 us, different in every profiling window (not repeatable)
 Harness 0.4.0 answers PROF with simulated, repeatable timings (COST below); 0.3.0 does not know PROF.
 `builds` maps a build id to the bugs that build has, so deploying a fixed build changes the behaviour.
 """
@@ -68,6 +69,7 @@ class SimFirmware:
 
     # ------------------------------------------------------------ the on-device profiler (harness 0.4.0)
     def prof_reset(self):
+        self.windows = getattr(self, "windows", -1) + 1
         self.prof = {}
         self.prof_start = self.clock()
         self.rx_hwm = self.reply_hwm = 0
@@ -80,6 +82,8 @@ class SimFirmware:
             us = 400
         if key == "APP MUL" and "mul_fast" in self.bugs:
             us = 12
+        if key == "APP MUL" and "mul_noisy" in self.bugs:
+            us = 40 + (self.windows * 37) % 61
         n = self.prof.get(words[0], (0, 0, 0, 0))[0]
         return us + (n % 3)                                 # a little jitter, the same every run
 
