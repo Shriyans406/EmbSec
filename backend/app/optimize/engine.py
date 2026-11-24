@@ -26,8 +26,9 @@ from ..remediate.fixer import code_diff
 from ..build.engine import SUCCESS as BUILD_SUCCESS
 from ..jobs import AWAITING
 from ..jobs import FINAL as JOB_FINAL
-from .store import (ANALYSE, BASELINE, BUILD, CHECK, DEPLOYED, DONE, FAILED, FINAL, FINISHED, GOALS, MEASURE,
-                    PROPOSE, QUEUED, REPORT, ROLLBACK, RUNNING, SCAN, STOPPED, VARIANT, WAITING, OptimizationStore)
+from .store import (ANALYSE, BASELINE, BUILD, CHECK, DECIDE, DEPLOYED, DONE, FAILED, FINAL, FINISHED, GOALS,
+                    MEASURE, PROPOSE, QUEUED, REPORT, ROLLBACK, ROLLED_BACK, RUNNING, SCAN, STOPPED, VARIANT,
+                    WAITING, OptimizationStore)
 
 log = logging.getLogger("aeisp.optimize")
 
@@ -47,6 +48,8 @@ class OptimizationEngine:
                                               VARIANT: self.stage_variant, BUILD: self.stage_build,
                                               SCAN: self.stage_scan, PROPOSE: self.stage_propose,
                                               DEPLOYED: self.stage_deployed, MEASURE: self.stage_measure,
+                                              CHECK: self.stage_check, DECIDE: self.stage_decide,
+                                              ROLLBACK: self.stage_rollback, ROLLED_BACK: self.stage_rolled_back,
                                               REPORT: self.stage_report}
         services.jobs.register("optimization", self._run_job, "ai")
 
@@ -430,8 +433,78 @@ class OptimizationEngine:
         return self.after_measure(o)
 
     def after_measure(self, o: dict) -> str:
-        self.store.update(o["id"], outcome="measured")
+        return CHECK
+
+    # ------------------------------------------------------------ correctness and security still hold?
+    QUICK_FUZZ = {"families": ["boundary", "invalid", "overflow", "oversize"], "max_inputs": 150, "max_resets": 2}
+
+    def stage_check(self, o: dict, log_fn) -> str:
+        st = o["state"]
+        base = st.get("base_suites", {})
+        after = self.run_suites(list(base), f"optimisation:{o['id']}")
+        problems, compared = [], {}
+        for name, b in base.items():
+            a = after.get(name, {})
+            if not (b.get("run_id") and a.get("run_id")):
+                continue
+            cmp = self.s.tests.compare(b["run_id"], a["run_id"])
+            compared[name] = {"verdict": cmp["verdict"], "regressed": [x["name"] for x in cmp["regressed"]]}
+            problems += [f"{name}/{x['name']}: {x['before']!r} -> {x['after']!r}" for x in cmp["regressed"]]
+        fuzz = None
+        if o["params"].get("fuzz_check", True):
+            camp = self.s.fuzz.start(f"optimisation:{o['id']}", o["project"], self.QUICK_FUZZ["families"], seed=1,
+                                     max_inputs=self.QUICK_FUZZ["max_inputs"], max_resets=self.QUICK_FUZZ["max_resets"])
+            self.s.jobs.wait(camp["job_id"], 900)
+            serious = self.s.fuzz.store.findings(campaign_id=camp["id"], min_severity="medium")
+            fuzz = {"campaign_id": camp["id"],
+                    "serious": [{k: x[k] for k in ("id", "kind", "severity", "input_text")} for x in serious]}
+            problems += [f"fuzz finding #{x['id']} {x['kind']} on {x['input_text'][:40]!r}" for x in serious]
+        self.store.set_state(o["id"], check_suites=after, check=compared, fuzz_check=fuzz, check_problems=problems)
+        self.event(o, "done" if not problems else "warning",
+                   f"correctness: {len(problems)} problems in {len(compared)} suites"
+                   + (f" + quick fuzz #{fuzz['campaign_id']}" if fuzz else ""), {"problems": problems}, log_fn)
+        return DECIDE
+
+    def stage_decide(self, o: dict, log_fn) -> str:
+        problems = o["state"].get("check_problems", [])
+        if problems:
+            return self.reject_variant(o, "correctness / security: " + "; ".join(problems[:5]), log_fn, deployed=True)
+        self.store.update(o["id"], outcome="accepted")
+        cmp = o["state"].get("comparison", {})
+        self.event(o, "done", f"variant ACCEPTED: build #{o['variant_build']} is measurably better "
+                              f"(speed {cmp.get('speed')}, size {o['state'].get('size')}) and still correct",
+                   log_fn=log_fn)
         return REPORT
+
+    # ------------------------------------------------------------ roll back: a human decides again
+    def stage_rollback(self, o: dict, log_fn) -> Optional[str]:
+        try:
+            job = self.s.deploys.propose_deploy(o["base_build"], f"optimisation:{o['id']} rollback")
+        except ApiError as e:
+            self.store.update(o["id"], outcome="rejected_not_rolled_back",
+                              error=f"the rollback to build #{o['base_build']} could not be proposed: {e.message}")
+            return REPORT
+        self.store.update(o["id"], rollback_job_id=job["id"], stage=ROLLED_BACK, status=WAITING)
+        self.event({**o, "stage": ROLLBACK}, "waiting", f"redeployment of the baseline build #{o['base_build']} "
+                   f"proposed as job #{job['id']} (confirm text '{job['confirm_token']}')", {"job_id": job["id"]},
+                   log_fn)
+        return None
+
+    def stage_rolled_back(self, o: dict, log_fn) -> Optional[str]:
+        job = self._job_decided(o, o["rollback_job_id"])
+        if job is None:
+            return None
+        if job["status"] != "SUCCEEDED":
+            self.store.update(o["id"], outcome="rejected_not_rolled_back",
+                              error=f"the rollback was not made (job #{job['id']} {job['status']}); the board still "
+                                    f"runs the rejected variant #{o['variant_build']}")
+            return REPORT
+        self.event(o, "done", f"rolled back: the board runs the baseline build #{o['base_build']} again",
+                   log_fn=log_fn)
+        nxt = self.next_variant(o)
+        if nxt == REPORT:
+            self.store.update(o["id"], outcome="rejected_rolled_back")
+        return nxt
 
     # ------------------------------------------------------------ report
     def stage_report(self, o: dict, log_fn) -> str:
