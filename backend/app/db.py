@@ -240,6 +240,42 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         )""",
         "CREATE INDEX IF NOT EXISTS idx_fuzz_findings_status ON fuzz_findings (status, severity)",
     ]),
+    (9, "remediations", [
+        """CREATE TABLE IF NOT EXISTS remediations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            finding_id INTEGER NOT NULL,
+            project TEXT,
+            status TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            outcome TEXT,
+            requested_by TEXT,
+            before_build INTEGER,
+            after_build INTEGER,
+            deploy_job_id INTEGER,
+            rollback_job_id INTEGER,
+            fix_rounds INTEGER NOT NULL DEFAULT 0,
+            params_json TEXT,
+            state_json TEXT,
+            diff_text TEXT,
+            root_cause TEXT,
+            report_json TEXT,
+            error TEXT,
+            stop_requested INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            finished_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS remediation_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            remediation_id INTEGER NOT NULL,
+            ts TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            message TEXT,
+            detail_json TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_remediation_events ON remediation_events (remediation_id, id)",
+    ]),
 ]
 
 
