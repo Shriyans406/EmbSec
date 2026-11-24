@@ -53,6 +53,8 @@ class Observation:
     uptime_after: Optional[int] = None
     partial_replies: List[str] = field(default_factory=list)
     partial: bool = False
+    note: str = ""
+    sequence: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)

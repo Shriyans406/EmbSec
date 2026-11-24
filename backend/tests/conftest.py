@@ -111,6 +111,8 @@ def app(settings, board):
     services.deploys.device = services.device
     services.tests.device = services.device
     services.analysis.device = services.device
+    services.fuzz.device = services.device
+    services.fuzz.sleep = lambda s: None
     services.deploys.board_factory = lambda: board          # no real board is ever touched in tests
     return create_app(settings, services)
 

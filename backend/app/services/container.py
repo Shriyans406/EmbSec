@@ -12,6 +12,7 @@ from ..db import migrate
 from ..deploy.engine import DeployConfig, load_deploy_config
 from ..deploy.store import DeploymentStore
 from ..jobs import JobContext, JobFailed, JobManager
+from ..fuzz.engine import FuzzService
 from ..pipeline.engine import PipelineEngine
 from ..settings import Settings
 from ..tools import ToolRegistry, build_registry
@@ -38,6 +39,7 @@ class Services:
     agents: Optional[AgentService] = None
     analysis: Optional[AnalysisService] = None
     pipelines: Optional["PipelineEngine"] = None
+    fuzz: Optional["FuzzService"] = None
 
     def start(self) -> None:
         # orphan recovery first (before any worker runs), and only here: building the services must not change
@@ -46,6 +48,8 @@ class Services:
             self.agents.recover()
         if self.pipelines:
             self.pipelines.recover()
+        if self.fuzz:
+            self.fuzz.recover()
         self.jobs.start()
 
     def stop(self) -> None:
@@ -85,4 +89,5 @@ def build_services(settings: Settings, llm_factory=None) -> Services:
     s.tools = build_registry(s)
     s.agents = AgentService(settings, jobs, s.tools, llm_factory)
     s.pipelines = PipelineEngine(s, settings)
+    s.fuzz = FuzzService(settings.db_path, jobs, device, s.tests, s.pipelines)
     return s

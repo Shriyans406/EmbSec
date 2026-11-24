@@ -76,6 +76,8 @@ class DeviceManager:
         with self.exclusive(who, wait_s=wait_s, release_port=False):
             def send(text: str) -> str:
                 return self._link.request(text, retries=0, reconnect_wait=5.0)
+            # the fuzzer also sends lines WITHOUT a line ending, to check the firmware's idle timeout
+            send.partial = getattr(self._link, "send_partial", None)
             yield send
 
     # ---------------------------------------------------------------- read
