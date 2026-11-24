@@ -128,6 +128,7 @@ class FuzzService:
         self.tests = tests
         self.pipelines = pipelines
         self.sleep = time.sleep
+        self.recover_s: Optional[float] = None    # tests make the recovery wait short
         jobs.register("fuzz", self._run, "board")
         jobs.register("fuzz_repro", self._reproduce, "board")
 
@@ -137,6 +138,8 @@ class FuzzService:
     # ------------------------------------------------------------ starting
     def budget(self, given: dict, elevated: bool) -> dict:
         b = {**DEFAULT_BUDGET, **{k: v for k, v in given.items() if v is not None}}
+        if self.recover_s is not None:
+            b["recover_s"] = self.recover_s
         caps = HARD_LIMITS if elevated else AGENT_LIMITS
         for key, cap in caps.items():
             if not 1 <= int(b[key]) <= cap:
@@ -264,7 +267,7 @@ class FuzzService:
         p = ctx.params
         f = self.store.finding(p["finding_id"])
         with self.device.session(f"reproduce finding #{f['id']}") as send:
-            board = Board(send, DEFAULT_BUDGET["recover_s"], self.sleep)
+            board = Board(send, self.recover_s or DEFAULT_BUDGET["recover_s"], self.sleep)
             if not board.recover():
                 raise JobFailed("the board does not answer PING")
             fw = board.firmware()
