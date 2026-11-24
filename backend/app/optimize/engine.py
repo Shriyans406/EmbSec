@@ -23,8 +23,11 @@ from ..jobs import JobContext, JobFailed
 from ..services.testing import RunRequest
 from ..pipeline.spec import spec_for_coder
 from ..remediate.fixer import code_diff
-from .store import (ANALYSE, BASELINE, BUILD, DONE, FAILED, FINAL, FINISHED, GOALS, QUEUED, REPORT, RUNNING,
-                    STOPPED, VARIANT, WAITING, OptimizationStore)
+from ..build.engine import SUCCESS as BUILD_SUCCESS
+from ..jobs import AWAITING
+from ..jobs import FINAL as JOB_FINAL
+from .store import (ANALYSE, BASELINE, BUILD, CHECK, DEPLOYED, DONE, FAILED, FINAL, FINISHED, GOALS, MEASURE,
+                    PROPOSE, QUEUED, REPORT, ROLLBACK, RUNNING, SCAN, STOPPED, VARIANT, WAITING, OptimizationStore)
 
 log = logging.getLogger("aeisp.optimize")
 
@@ -41,7 +44,10 @@ class OptimizationEngine:
         self.settings = settings
         self.store = OptimizationStore(settings.db_path)
         self.handlers: Dict[str, Callable] = {BASELINE: self.stage_baseline, ANALYSE: self.stage_analyse,
-                                              VARIANT: self.stage_variant, REPORT: self.stage_report}
+                                              VARIANT: self.stage_variant, BUILD: self.stage_build,
+                                              SCAN: self.stage_scan, PROPOSE: self.stage_propose,
+                                              DEPLOYED: self.stage_deployed, MEASURE: self.stage_measure,
+                                              REPORT: self.stage_report}
         services.jobs.register("optimization", self._run_job, "ai")
 
     def recover(self) -> int:
@@ -69,6 +75,32 @@ class OptimizationEngine:
 
     def get(self, oid: int) -> dict:
         return self.store.get(oid)
+
+    def resume(self, oid: int, who: str) -> dict:
+        o = self.get(oid)
+        if o["status"] != WAITING:
+            raise ApiError(409, "not_waiting", f"optimisation {oid} is {o['status']}, not waiting")
+        jid = o["rollback_job_id"] if o["stage"] == "rolled_back" else o["deploy_job_id"]
+        job = self.s.jobs.get(jid) if jid else None
+        if job is not None and job["status"] == AWAITING:
+            raise ApiError(409, "still_awaiting_approval",
+                           f"proposal job #{job['id']} still waits for a human; approve or reject it first")
+        self.store.update(oid, status=QUEUED)
+        job = self.s.jobs.submit("optimization", {"optimization_id": oid}, who, summary=f"resume optimisation {oid}")
+        return {**self.get(oid), "job_id": job["id"]}
+
+    def stop(self, oid: int, who: str) -> dict:
+        o = self.get(oid)
+        if o["status"] in FINAL:
+            raise ApiError(409, "optimization_finished", f"optimisation {oid} is already {o['status']}")
+        self.store.update(oid, stop_requested=1)
+        if o["status"] == WAITING:
+            self.store.update(oid, stage=REPORT, outcome="stopped", error=f"stopped by {who}")
+            try:
+                self.drive(oid, lambda t: None)
+            except JobFailed:
+                pass
+        return self.get(oid)
 
     # ------------------------------------------------------------ the loop
     def _run_job(self, ctx: JobContext) -> dict:
@@ -260,6 +292,145 @@ class OptimizationEngine:
         return self.after_variant(o)
 
     def after_variant(self, o: dict) -> str:
+        return BUILD
+
+    # ------------------------------------------------------------ a variant that is not good enough
+    def reject_variant(self, o: dict, why: str, log_fn, deployed: bool = False) -> str:
+        st = o["state"]
+        tried = st.get("tried", []) + [{"variant": o["variants_tried"], "proposal": st.get("proposal"),
+                                        "build": o["variant_build"], "why": why}]
+        self.store.set_state(o["id"], tried=tried)
+        self.event(o, "warning", f"variant {o['variants_tried']} REJECTED: {why}", log_fn=log_fn)
+        self.s.firmware.restore_sources(o["project"], o["base_build"])
+        if deployed:
+            return ROLLBACK                                  # the board runs the variant: put the baseline back
+        return self.next_variant(o)
+
+    def next_variant(self, o: dict) -> str:
+        o = self.get(o["id"])
+        if o["variants_tried"] < o["params"].get("max_variants", 2):
+            self.store.update(o["id"], variant_build=None, fix_rounds=0)
+            return ANALYSE
+        self.store.update(o["id"], outcome="no_gain")
+        return REPORT
+
+    # ------------------------------------------------------------ build, scan, size gate
+    def stage_build(self, o: dict, log_fn) -> str:
+        job = self.s.jobs.wait(self.s.builds.start(o["project"], f"optimisation:{o['id']}")["id"], 1200)
+        res = job.get("result") or {}
+        builds = o["state"].get("builds", []) + [{"build_id": res.get("id"), "status": res.get("status")}]
+        self.store.set_state(o["id"], builds=builds)
+        if res.get("status") == BUILD_SUCCESS:
+            self.store.update(o["id"], variant_build=res["id"])
+            self.event(o, "done", f"build #{res['id']} SUCCESS", log_fn=log_fn)
+            return SCAN
+        if res.get("status") != "FAILED":
+            raise StageFailed(f"the build could not run: {job.get('error')}")
+        errors = [d for d in res.get("diagnostics", []) if d.get("severity") == "error"][:15]
+        text = "\n".join(f"- {d.get('file')}:{d.get('line')}: {d.get('message')}" for d in errors)
+        if o["fix_rounds"] < 1:
+            self.store.update(o["id"], fix_rounds=o["fix_rounds"] + 1)
+            self.store.set_state(o["id"], retry_note=f"It did not compile:\n{text}")
+            return VARIANT
+        return self.reject_variant(o, f"build #{res.get('id')} does not compile", log_fn)
+
+    def stage_scan(self, o: dict, log_fn) -> str:
+        scan = self.s.analysis.security_scan(build_id=o["variant_build"])
+        if scan["verdict"] != "PASS":
+            bad = [f"{f['rule']} {f['title']} ({f['file']}:{f['line']})" for f in scan["findings"]
+                   if f["severity"] in ("critical", "high")][:5]
+            return self.reject_variant(o, "the security scan fails: " + "; ".join(bad), log_fn)
+        base, new = o["state"]["base_size"], self.size_of(o["variant_build"])
+        size = {k: {"before": base.get(k), "after": new.get(k),
+                    "change_pct": round(100 * (new[k] - base[k]) / base[k], 2) if base.get(k) else None}
+                for k in ("flash_bytes", "ram_bytes") if base.get(k) is not None and new.get(k) is not None}
+        self.store.set_state(o["id"], size=size)
+        if o["goal"] in ("flash", "ram"):
+            key = f"{o['goal']}_bytes"
+            change = (size.get(key) or {}).get("change_pct")
+            if change is None or -change < o["min_gain_pct"]:
+                return self.reject_variant(o, f"{o['goal']} changed by {change} %, the goal is at least "
+                                              f"-{o['min_gain_pct']:g} %", log_fn)
+        elif (size.get("flash_bytes") or {}).get("change_pct", 0) > 10:
+            return self.reject_variant(o, f"flash grows by {size['flash_bytes']['change_pct']} % (more than 10 %)",
+                                       log_fn)
+        self.event(o, "done", f"security scan PASS; size {size}", {"size": size}, log_fn)
+        return PROPOSE
+
+    # ------------------------------------------------------------ deployment: a human decides
+    def stage_propose(self, o: dict, log_fn) -> Optional[str]:
+        try:
+            job = self.s.deploys.propose_deploy(o["variant_build"], f"optimisation:{o['id']}")
+        except ApiError as e:
+            self.s.firmware.restore_sources(o["project"], o["base_build"])
+            raise StageFailed(f"the variant build #{o['variant_build']} could not be proposed: {e.message}",
+                              "not_deployed")
+        self.store.update(o["id"], deploy_job_id=job["id"], stage=DEPLOYED, status=WAITING)
+        self.event({**o, "stage": PROPOSE}, "waiting", f"deployment of variant build #{o['variant_build']} proposed "
+                   f"as job #{job['id']}; waiting for a human (confirm text '{job['confirm_token']}')",
+                   {"job_id": job["id"]}, log_fn)
+        return None
+
+    def _job_decided(self, o: dict, job_id: int) -> Optional[dict]:
+        job = self.s.jobs.get(job_id)
+        if job is None:
+            raise StageFailed(f"proposal job #{job_id} has disappeared")
+        if job["status"] == AWAITING:
+            self.store.update(o["id"], status=WAITING)
+            return None
+        if job["status"] not in JOB_FINAL:
+            job = self.s.jobs.wait(job_id, 900)
+        self.store.update(o["id"], status=RUNNING)
+        return job
+
+    def stage_deployed(self, o: dict, log_fn) -> Optional[str]:
+        job = self._job_decided(o, o["deploy_job_id"])
+        if job is None:
+            return None
+        if job["status"] == "SUCCEEDED":
+            self.event(o, "done", f"variant build #{o['variant_build']} is on the board", log_fn=log_fn)
+            return MEASURE
+        self.s.firmware.restore_sources(o["project"], o["base_build"])
+        if job["status"] in ("REJECTED", "EXPIRED", "CANCELLED"):
+            raise StageFailed(f"the variant was not deployed: job #{job['id']} {job['status']}", "not_deployed")
+        raise StageFailed(f"the deployment of the variant failed (the deploy engine rolled back): {job.get('error')}",
+                          "deploy_failed")
+
+    # ------------------------------------------------------------ A/B: the variant against the baseline
+    def stage_measure(self, o: dict, log_fn) -> str:
+        if self.board_build()["build_id"] != o["variant_build"]:
+            raise StageFailed(f"the board does not run the variant #{o['variant_build']}")
+        run = self.run_bench(o["benchmark"], f"optimisation:{o['id']}")
+        self.store.update(o["id"], variant_run_id=run["id"])
+        cmp = self.s.profiling.compare(o["base_run_id"], run["id"])
+        self.store.set_state(o["id"], comparison=cmp)
+        target = o["state"].get("target")
+        problems = []
+        if o["goal"] == "speed":
+            t = (cmp["commands"].get(target) or {})
+            m = t.get("device_us") or t.get("host_ms")
+            if not m or m["verdict"] != "better" or (m["change_pct"] or 0) > -o["min_gain_pct"]:
+                problems.append(f"{target}: {m and m['before']} -> {m and m['after']} "
+                                f"({m and m['change_pct']} %), needs at least -{o['min_gain_pct']:g} % beyond the "
+                                f"noise ({m and m['noise']})")
+        for name, c in cmp["commands"].items():
+            m = c.get("device_us") or c.get("host_ms") or {}
+            if name != target and m.get("verdict") == "worse":
+                problems.append(f"{name} got slower: {m['before']} -> {m['after']}")
+            if c.get("errors") and c["errors"][1] > c["errors"][0]:
+                problems.append(f"{name} now answers with errors")
+        if (cmp.get("throughput_cps") or {}).get("verdict") == "worse":
+            problems.append("throughput dropped")
+        if not run["repeatable"]:
+            problems.append("the variant's benchmark is not repeatable")
+        summary = {n: (c.get("device_us") or c.get("host_ms") or {}).get("change_pct") for n, c in cmp["commands"].items()}
+        if problems:
+            return self.reject_variant(o, "; ".join(problems), log_fn, deployed=True)
+        self.event(o, "done", f"A/B: run #{o['base_run_id']} -> #{run['id']}: {summary} (% change)", cmp, log_fn)
+        return self.after_measure(o)
+
+    def after_measure(self, o: dict) -> str:
+        self.store.update(o["id"], outcome="measured")
         return REPORT
 
     # ------------------------------------------------------------ report
