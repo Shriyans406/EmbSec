@@ -26,6 +26,7 @@ add_executable(aeisp_firmware
     src/main.c
     src/device.c
     src/proto.c
+    src/prof.c
     src/app_default.c
     ${APP_SOURCES}
 )

@@ -17,6 +17,11 @@
  *
  * Rules for application code: do not use GPIO 12 or 13 (FPGA power / enable on
  * the Shrike Lite); GPIO 4 is the user LED, which the harness also drives.
+ *
+ * Profiling (API version 2): wrap a section of your code in
+ *   app_prof_begin(slot, "name");  ...  app_prof_end(slot);
+ * (slot 0..7). The harness measures it in microseconds; the host reads the
+ * numbers with "PROF APP <slot>". Both calls cost about a microsecond.
  */
 #ifndef APP_API_H
 #define APP_API_H
@@ -24,7 +29,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define APP_API_VERSION 1
+#define APP_API_VERSION 2
 
 #define APP_OK 0
 #define APP_ERR_ARGS                                                           \
@@ -37,5 +42,8 @@
 void app_init(void);
 void app_tick(void);
 int app_command(const char *args, char *out, size_t cap);
+
+void app_prof_begin(int slot, const char *name);
+void app_prof_end(int slot);
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * AEISP Phase 2 - device-management firmware for the Shrike Lite (RP2040).
+ * AEISP harness firmware for the Shrike Lite (RP2040), with on-device profiling.
  * Protocol and command list: see src/proto.h and src/device.c.
  *
  * Board facts (Vicharak Shrike-Lite):
@@ -33,6 +33,7 @@
   2000 /* a half-received line is dropped after this much silence   */
 
 static char g_uid[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1];
+static uint64_t g_wait_us = 0;
 static device_t g_dev;
 
 /* ---------- hardware abstraction for the device core ---------- */
@@ -128,12 +129,21 @@ int main(void) {
   bool overflow = false;
   uint32_t last_rx_ms = hal_uptime_ms();
 
+  uint64_t loop_start = time_us_64();
   while (true) {
     watchdog_update();
+    uint64_t t0 = time_us_64();
+    prof_loop(&g_dev.prof, t0 - loop_start, g_wait_us); /* the previous pass */
+    loop_start = t0;
     device_tick(&g_dev);
+    uint64_t t1 = time_us_64();
     app_tick();
+    uint64_t t2 = time_us_64();
+    prof_add(&g_dev.prof.dev_tick, t1 - t0);
+    prof_add(&g_dev.prof.app_tick, t2 - t1);
 
     int c = getchar_timeout_us(1000);
+    g_wait_us = time_us_64() - t2; /* time spent waiting for input */
     uint32_t now = hal_uptime_ms();
 
     if (c == PICO_ERROR_TIMEOUT) {

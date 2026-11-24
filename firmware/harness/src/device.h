@@ -10,10 +10,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "prof.h"
 #include "proto.h"
 
 #define FW_NAME "AEISP-DEV"
-#define FW_VERSION "0.3.0"
+#define FW_VERSION "0.4.0"
 #define BLINK_MIN_MS 50
 #define BLINK_MAX_MS 10000
 
@@ -57,6 +58,7 @@ typedef struct {
   uint32_t err_count;
   device_action_t
       pending; /* action main() must perform AFTER the reply has been sent */
+  prof_t prof;    /* on-device measurements, read with the PROF command */
 } device_t;
 
 void device_init(device_t *d, const device_hal_t *hal);

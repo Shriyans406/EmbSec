@@ -281,6 +281,62 @@ static proto_err_t h_hang(device_t *d, proto_request_t *r, char *out,
   return PE_NONE;
 }
 
+/* PROF [CMD <name> | APP <slot> | RESET]: the on-device measurements. */
+static int cmd_index(const char *name);
+
+static proto_err_t h_prof(device_t *d, proto_request_t *r, char *out,
+                          size_t cap) {
+  prof_t *p = &d->prof;
+  char *argv[2];
+  int n = proto_split_args(r->rest, argv, 2);
+  if (n == 0) {
+    uint64_t win = p->now_us ? p->now_us() - p->window_start_us : 0;
+    uint32_t busy = prof_busy_x100(p);
+    snprintf(out, cap,
+             "PROF window_ms=%lu loops=%lu busy_pct=%lu.%02lu loop_max_us=%lu "
+             "loop_avg_us=%lu tick_max_us=%lu app_tick_avg_us=%lu rx_hwm=%lu "
+             "reply_hwm=%lu",
+             (unsigned long)(win / 1000u), (unsigned long)p->loop.n,
+             (unsigned long)(busy / 100u), (unsigned long)(busy % 100u),
+             (unsigned long)p->loop.max_us, (unsigned long)prof_avg(&p->loop),
+             (unsigned long)(p->app_tick.max_us > p->dev_tick.max_us
+                                 ? p->app_tick.max_us
+                                 : p->dev_tick.max_us),
+             (unsigned long)prof_avg(&p->app_tick), (unsigned long)p->rx_hwm,
+             (unsigned long)p->reply_hwm);
+    return PE_NONE;
+  }
+  if (n == 1 && strcmp(argv[0], "RESET") == 0) {
+    prof_reset(p);
+    snprintf(out, cap, "PROF reset");
+    return PE_NONE;
+  }
+  if (n == 2 && strcmp(argv[0], "CMD") == 0) {
+    int i = cmd_index(argv[1]);
+    if (i < 0)
+      return fail(out, cap, PE_BAD_ARGS, "unknown command name");
+    const prof_stat_t *s = &p->cmd[i];
+    snprintf(out, cap, "PROF cmd=%s n=%lu avg_us=%lu min_us=%lu max_us=%lu",
+             argv[1], (unsigned long)s->n, (unsigned long)prof_avg(s),
+             (unsigned long)s->min_us, (unsigned long)s->max_us);
+    return PE_NONE;
+  }
+  if (n == 2 && strcmp(argv[0], "APP") == 0) {
+    uint32_t slot = 0;
+    if (parse_u32(argv[1], &slot) != 0 || slot >= PROF_APP_SLOTS)
+      return fail(out, cap, PE_BAD_RANGE, "slot must be 0..7");
+    const prof_stat_t *s = &p->app[slot];
+    const char *name = p->app_name[slot] ? p->app_name[slot] : "-";
+    snprintf(out, cap,
+             "PROF app=%lu name=%.24s n=%lu avg_us=%lu min_us=%lu max_us=%lu",
+             (unsigned long)slot, name, (unsigned long)s->n,
+             (unsigned long)prof_avg(s), (unsigned long)s->min_us,
+             (unsigned long)s->max_us);
+    return PE_NONE;
+  }
+  return fail(out, cap, PE_BAD_ARGS, "usage: PROF [CMD <name>|APP <slot>|RESET]");
+}
+
 /* APP <anything>: forwarded to the generated application code (see app_api.h).
  */
 static proto_err_t h_app(device_t *d, proto_request_t *r, char *out,
@@ -308,8 +364,18 @@ static const struct {
     {"STATUS", h_status}, {"LED", h_led},         {"BLINK", h_blink},
     {"TIMER", h_timer},   {"TEMP", h_temp},       {"RESETINFO", h_resetinfo},
     {"REBOOT", h_reboot}, {"BOOTSEL", h_bootsel}, {"HANG", h_hang},
-    {"APP", h_app},
+    {"APP", h_app},       {"PROF", h_prof},
 };
+
+#define N_COMMANDS (sizeof(COMMANDS) / sizeof(COMMANDS[0]))
+
+static int cmd_index(const char *name) {
+  for (size_t i = 0; i < N_COMMANDS; i++) {
+    if (strcmp(name, COMMANDS[i].name) == 0)
+      return (int)i;
+  }
+  return -1;
+}
 
 /* ---------- public API ---------- */
 
@@ -317,6 +383,8 @@ void device_init(device_t *d, const device_hal_t *hal) {
   memset(d, 0, sizeof(*d));
   d->hal = hal;
   d->timer_state = TIMER_IDLE;
+  prof_init(&d->prof, hal->time_us);
+  prof_global = &d->prof;
   led_set(d, false);
 }
 
@@ -328,6 +396,7 @@ size_t device_handle_line(device_t *d, char *line, char *out, size_t cap) {
     return 0; /* blank line: ignored, no reply */
   }
   d->cmd_count++;
+  prof_rx(&d->prof, strlen(line));
 
   proto_request_t r;
   char detail[PROTO_BODY_MAX];
@@ -335,12 +404,16 @@ size_t device_handle_line(device_t *d, char *line, char *out, size_t cap) {
   proto_err_t e = proto_parse(line, &r);
   if (e == PE_NONE) {
     e = PE_UNKNOWN_CMD;
-    for (size_t i = 0; i < sizeof(COMMANDS) / sizeof(COMMANDS[0]); i++) {
+    int slot = PROF_CMD_SLOTS - 1; /* unknown commands share the last slot */
+    uint64_t t0 = d->hal->time_us();
+    for (size_t i = 0; i < N_COMMANDS; i++) {
       if (strcmp(r.cmd, COMMANDS[i].name) == 0) {
         e = COMMANDS[i].fn(d, &r, detail, sizeof(detail));
+        slot = (int)i;
         break;
       }
     }
+    prof_add(&d->prof.cmd[slot], d->hal->time_us() - t0);
   }
 
   char body[PROTO_BODY_MAX + 32];
@@ -355,7 +428,9 @@ size_t device_handle_line(device_t *d, char *line, char *out, size_t cap) {
       snprintf(body, sizeof(body), "ERR %d %s", (int)e, proto_err_name(e));
     }
   }
-  return proto_format_reply(out, cap, &r, body);
+  size_t n = proto_format_reply(out, cap, &r, body);
+  prof_reply(&d->prof, n);
+  return n;
 }
 
 size_t device_error_reply(device_t *d, proto_err_t e, char *out, size_t cap) {
