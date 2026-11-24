@@ -26,6 +26,7 @@ from ..remediate.fixer import code_diff
 from ..build.engine import SUCCESS as BUILD_SUCCESS
 from ..jobs import AWAITING
 from ..jobs import FINAL as JOB_FINAL
+from .report import build_report, to_markdown, write_markdown
 from .store import (ANALYSE, BASELINE, BUILD, CHECK, DECIDE, DEPLOYED, DONE, FAILED, FINAL, FINISHED, GOALS,
                     MEASURE, PROPOSE, QUEUED, REPORT, ROLLBACK, ROLLED_BACK, RUNNING, SCAN, STOPPED, VARIANT,
                     WAITING, OptimizationStore)
@@ -510,9 +511,19 @@ class OptimizationEngine:
     def stage_report(self, o: dict, log_fn) -> str:
         outcome = o["outcome"] or "failed"
         status = STOPPED if outcome == "stopped" else (FAILED if outcome == "failed" else FINISHED)
-        report = {"outcome": outcome, "error": o["error"], "project": o["project"], "goal": o["goal"],
-                  "base_build": o["base_build"], "variant_build": o["variant_build"]}
         self.event(o, "done", f"optimisation finished: {outcome}", log_fn=log_fn)
+        report = build_report({**o, "outcome": outcome}, self.s)
+        path = write_markdown(self.settings.root, o["id"],
+                              to_markdown(report, o.get("diff_text") or "", self.store.events(o["id"])))
+        report["markdown_path"] = str(path)
         self.store.update(o["id"], report_json=json.dumps(report, default=str), outcome=outcome, status=status,
                           finished_at=now_iso())
         return DONE
+
+    def report_markdown(self, oid: int) -> str:
+        o = self.get(oid)
+        if not o["report"]:
+            raise ApiError(409, "no_report_yet", f"optimisation {oid} has not finished")
+        path = Path(o["report"].get("markdown_path") or "")
+        return path.read_text(encoding="utf-8") if path.is_file() else \
+            to_markdown(o["report"], o.get("diff_text") or "", self.store.events(oid))

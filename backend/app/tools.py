@@ -213,6 +213,18 @@ class VsBaselineArgs(BenchNameArg):
     run_id: Optional[int] = Field(None, ge=1, description="default: the latest run")
 
 
+class OptimizeArgs(BaseModel):
+    project: str
+    goal: Literal["speed", "flash", "ram"] = "speed"
+    target: Optional[str] = Field(None, description="the benchmark command to speed up (default: the slowest)")
+    min_gain_pct: float = Field(10.0, ge=1, le=90)
+    max_variants: int = Field(2, ge=1, le=3)
+
+
+class OptimizationArg(BaseModel):
+    optimization_id: int = Field(ge=1)
+
+
 class ReproArgs(FindingArg):
     attempts: int = Field(3, ge=1, le=10)
     minimise: bool = Field(True, description="shrink the input to the smallest one that still fails")
@@ -486,6 +498,15 @@ def build_registry(s) -> ToolRegistry:
            VsBaselineArgs, "viewer", "read", lambda s, p, a: s.profiling.against_baseline(a.benchmark, a.run_id)))
     T(Tool("benchmark_history", "Every run of a benchmark, newest first, with the build it ran on.",
            BenchNameArg, "viewer", "read", lambda s, p, a: s.profiling.history(a.benchmark)))
+    T(Tool("start_optimization", "Optimise a project (it must be on the board): measure the baseline, the Performance "
+           "agent proposes one change, the Firmware agent writes it, build + scan, PROPOSE the deployment (a human "
+           "approves), A/B benchmark with noise margins, correctness suites + quick fuzz; keep it only if it is "
+           "better by min_gain_pct and still correct, otherwise roll back (a human approves) and try another.",
+           OptimizeArgs, "agent", "write",
+           lambda s, p, a: s.optimizations.start(a.project, _who(p), a.goal, a.target, None, a.min_gain_pct,
+                                                 a.max_variants)))
+    T(Tool("get_optimization", "An optimisation: stage, variants tried and why they were rejected, A/B result.",
+           OptimizationArg, "viewer", "read", lambda s, p, a: s.optimizations.get(a.optimization_id)))
     return r
 
 

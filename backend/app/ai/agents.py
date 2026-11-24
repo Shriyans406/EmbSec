@@ -87,7 +87,7 @@ DEBUG_SCHEMA = _schema({
 SUPERVISOR = AgentSpec(
     "supervisor", "supervisor",
     ["list_projects", "list_sources", "build_history", "get_build", "deployment_history", "list_test_runs",
-     "device_status", "list_fuzz_findings", "get_remediation"],
+     "device_status", "list_fuzz_findings", "get_remediation", "get_optimization"],
     "plans the work and delegates to the specialists", max_steps=30, extra={"delegates": True})
 
 TEAM: Dict[str, AgentSpec] = {s.name: s for s in [
