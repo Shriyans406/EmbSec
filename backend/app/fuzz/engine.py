@@ -129,6 +129,7 @@ class FuzzService:
         self.pipelines = pipelines
         self.sleep = time.sleep
         jobs.register("fuzz", self._run, "board")
+        jobs.register("fuzz_repro", self._reproduce, "board")
 
     def recover(self) -> int:
         return self.store.recover_orphans()
@@ -246,6 +247,52 @@ class FuzzService:
         if stop and "did not come back" in stop:
             raise JobFailed(stop, out)
         return out
+
+    # ------------------------------------------------------------ reproduction
+    def start_reproduce(self, fid: int, who: str, attempts: int = 3, minimise: bool = True,
+                        max_tries: int = 40, max_resets: int = 3) -> dict:
+        f = self.store.finding(fid)
+        if not 1 <= attempts <= 10 or not 0 <= max_tries <= 100 or not 0 <= max_resets <= AGENT_LIMITS["max_resets"]:
+            raise ApiError(422, "budget_too_large", "attempts 1..10, max_tries 0..100, max_resets 0..3")
+        return self.jobs.submit("fuzz_repro", {"finding_id": fid, "attempts": attempts, "minimise": minimise,
+                                               "max_tries": max_tries, "max_resets": max_resets}, who,
+                                summary=f"reproduce fuzz finding #{fid} ({f['kind']}: {f['input_text'][:40]!r})")
+
+    def _reproduce(self, ctx: JobContext) -> dict:
+        from .repro import minimise, recipe, reproduce
+
+        p = ctx.params
+        f = self.store.finding(p["finding_id"])
+        with self.device.session(f"reproduce finding #{f['id']}") as send:
+            board = Board(send, DEFAULT_BUDGET["recover_s"], self.sleep)
+            if not board.recover():
+                raise JobFailed("the board does not answer PING")
+            fw = board.firmware()
+            rep = reproduce(board, f, p["attempts"])
+            ctx.log(f"finding #{f['id']}: {rep['status']} ({rep['hits']}/{rep['attempts']}) on build "
+                    f"#{fw.get('build_id')}")
+            mini = {"minimized": f["input_text"], "tries": 0, "resets": 0, "note": "not reproduced"}
+            if rep["status"] == "reproduced" and p["minimise"]:
+                mini = minimise(board, f, p["max_tries"], p["max_resets"], ctx.log)
+                ctx.log(f"minimised to {mini['minimized']!r} in {mini['tries']} tries")
+            board.recover()
+        entry = {"build_id": fw.get("build_id"), "src_hash": fw.get("src_hash"), **rep,
+                 "minimise": {k: v for k, v in mini.items()},
+                 "recipe": recipe(f, mini["minimized"], fw)}
+        history = f["reproductions"] + [entry]
+        status = f["status"] if f["status"] in ("fixed", "wont_fix") else rep["status"]
+        self.store.update_finding(f["id"], status=status, minimized=mini["minimized"],
+                                  reproductions_json=json.dumps(history, default=str))
+        return {"finding_id": f["id"], **{k: entry[k] for k in ("status", "hits", "attempts", "build_id")},
+                "minimized": mini["minimized"], "recipe": entry["recipe"]}
+
+    def finding(self, fid: int) -> dict:
+        return self.store.finding(fid)
+
+    def set_status(self, fid: int, status: str) -> dict:
+        self.store.finding(fid)
+        self.store.update_finding(fid, status=status)
+        return self.store.finding(fid)
 
     # ------------------------------------------------------------ reading
     def campaign(self, cid: int) -> dict:
