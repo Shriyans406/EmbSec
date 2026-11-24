@@ -305,6 +305,47 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         )""",
         "CREATE INDEX IF NOT EXISTS idx_benchmark_runs ON benchmark_runs (benchmark_id, build_id)",
     ]),
+    (11, "optimizations", [
+        """CREATE TABLE IF NOT EXISTS optimizations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL,
+            benchmark TEXT,
+            goal TEXT NOT NULL,
+            target TEXT,
+            min_gain_pct REAL NOT NULL,
+            status TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            outcome TEXT,
+            requested_by TEXT,
+            base_build INTEGER,
+            variant_build INTEGER,
+            base_run_id INTEGER,
+            variant_run_id INTEGER,
+            deploy_job_id INTEGER,
+            rollback_job_id INTEGER,
+            variants_tried INTEGER NOT NULL DEFAULT 0,
+            fix_rounds INTEGER NOT NULL DEFAULT 0,
+            params_json TEXT,
+            state_json TEXT,
+            diff_text TEXT,
+            report_json TEXT,
+            error TEXT,
+            stop_requested INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            finished_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS optimization_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            optimization_id INTEGER NOT NULL,
+            ts TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            message TEXT,
+            detail_json TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_optimization_events ON optimization_events (optimization_id, id)",
+    ]),
 ]
 
 

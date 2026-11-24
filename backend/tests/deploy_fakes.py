@@ -60,7 +60,7 @@ class FakeBoard:
 
 
 def add_build(services, build_id=1, seed=1, src="ab" * 32, status=BUILD_SUCCESS, project="demo",
-              files=None, diagnostics=None):
+              files=None, diagnostics=None, flash_bytes=0, ram_bytes=0):
     """Create a build record, its UF2 and its source snapshot, as the build engine would have."""
     cfg = services.cfg
     data = make_uf2(4, seed=seed)
@@ -76,6 +76,6 @@ def add_build(services, build_id=1, seed=1, src="ab" * 32, status=BUILD_SUCCESS,
     r = BuildResult(id=bid, project=project, status=status, sources_sha256=src, harness_version="0.3.0",
                     uf2_sha256=sha(data), uf2_valid=True, finished_at="x", duration_s=1.0,
                     artifact_dir=str(d), uf2_path=str(d / "firmware.uf2"), message="seeded for tests",
-                    diagnostics=diagnostics or [])
+                    diagnostics=diagnostics or [], flash_bytes=flash_bytes, ram_bytes=ram_bytes)
     store.finish(r)
     return data, src[:8]
