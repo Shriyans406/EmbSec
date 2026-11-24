@@ -26,6 +26,7 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 data/pipelines/
+data/remediations/
 data/logs/
 data/artifacts/
 

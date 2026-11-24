@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from ..db import now_iso
@@ -24,6 +25,7 @@ from ..fuzz.repro import reproduce
 from ..jobs import JobContext, JobFailed
 from ..services.testing import RunRequest
 from .fixer import code_diff, debug_task, root_cause_of
+from .report import build_report, to_markdown, write_markdown
 from ..build.engine import SUCCESS as BUILD_SUCCESS
 from ..jobs import AWAITING
 from ..jobs import FINAL as JOB_FINAL
@@ -432,9 +434,19 @@ class RemediationEngine:
     def stage_report(self, r: dict, log_fn) -> str:
         outcome = r["outcome"] or "failed"
         status = STOPPED if outcome == "stopped" else (FINISHED if outcome not in ("failed",) else FAILED)
-        report = {"outcome": outcome, "error": r["error"], "finding_id": r["finding_id"], "project": r["project"],
-                  "before_build": r["before_build"], "after_build": r["after_build"]}
+        self.event(r, "done", f"remediation finished: {outcome}", log_fn=log_fn)
+        report = build_report({**r, "outcome": outcome}, self.s.fuzz.finding(r["finding_id"]), self.s)
+        path = write_markdown(self.settings.root, r["id"],
+                              to_markdown(report, r.get("diff_text") or "", self.store.events(r["id"])))
+        report["markdown_path"] = str(path)
         self.store.update(r["id"], report_json=json.dumps(report, default=str), outcome=outcome, status=status,
                           finished_at=now_iso())
-        self.event(r, "done", f"remediation finished: {outcome}", log_fn=log_fn)
         return DONE
+
+    def report_markdown(self, rid: int) -> str:
+        r = self.get(rid)
+        if not r["report"]:
+            raise ApiError(409, "no_report_yet", f"remediation {rid} has not finished")
+        path = Path(r["report"].get("markdown_path") or "")
+        return path.read_text(encoding="utf-8") if path.is_file() else \
+            to_markdown(r["report"], r.get("diff_text") or "", self.store.events(rid))

@@ -173,6 +173,14 @@ class FindingArg(BaseModel):
     finding_id: int = Field(ge=1)
 
 
+class RemediateArgs(FindingArg):
+    max_fix_rounds: int = Field(2, ge=0, le=4)
+
+
+class RemediationArg(BaseModel):
+    remediation_id: int = Field(ge=1)
+
+
 class ReproArgs(FindingArg):
     attempts: int = Field(3, ge=1, le=10)
     minimise: bool = Field(True, description="shrink the input to the smallest one that still fails")
@@ -420,6 +428,13 @@ def build_registry(s) -> ToolRegistry:
            "that is on the board, and shrink it to the smallest failing input.",
            ReproArgs, "agent", "write",
            lambda s, p, a: s.fuzz.start_reproduce(a.finding_id, _who(p), a.attempts, a.minimise)))
+    T(Tool("start_remediation", "Fix a reproducible fuzz finding: reproduce, root cause + patch (Debugger agent), "
+           "rebuild, scan, PROPOSE the deployment (a human approves), retest the bug, check for regressions, accept "
+           "or roll back. Returns the remediation; it pauses at every deployment proposal.",
+           RemediateArgs, "agent", "write",
+           lambda s, p, a: s.remediations.start(a.finding_id, _who(p), a.max_fix_rounds)))
+    T(Tool("get_remediation", "A remediation: stage, root cause, diff statistics, retest, regressions, outcome.",
+           RemediationArg, "viewer", "read", lambda s, p, a: s.remediations.get(a.remediation_id)))
     return r
 
 
