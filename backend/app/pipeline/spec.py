@@ -119,14 +119,17 @@ def spec_cases(spec: dict) -> List[dict]:
 
 def spec_for_coder(spec: dict) -> str:
     """The spec as the task text for the Firmware agent."""
-    lines = [f"Implement the application firmware for project '{spec['project']}': {spec['title']}.",
-             spec["summary"], "", "Commands (every reply is written into `out`; the harness adds 'OK ' or the error):"]
-    for c in spec["commands"]:
-        lines.append(f"- {c['usage']}: {c['description']} Success reply text: {c['reply']}")
-        for ex in c["examples"]:
-            e = ex["expect"]
-            want = f"ERR {e['value']} ..." if e["kind"] == "error" else f"{e['kind']} {e['value']!r}"
-            lines.append(f"    {ex['request']!r} -> {want}   ({ex['why']})")
+    lines = [f"Implement the application firmware for project '{spec.get('project')}': "
+             f"{spec.get('title') or spec.get('project')}.",
+             spec.get("summary", ""), "", "Commands (every reply is written into `out`; the harness adds 'OK ' or "
+                                          "the error):"]
+    for c in spec.get("commands", []):
+        lines.append(f"- {c.get('usage', c.get('name'))}: {c.get('description', '')} Success reply text: "
+                     f"{c.get('reply', '')}")
+        for ex in c.get("examples", []):
+            e = ex.get("expect") or {}
+            want = f"ERR {e.get('value')} ..." if e.get("kind") == "error" else f"{e.get('kind')} {e.get('value')!r}"
+            lines.append(f"    {ex['request']!r} -> {want}   ({ex.get('why', '')})")
     if spec.get("constraints"):
         lines += ["", "Constraints:"] + [f"- {x}" for x in spec["constraints"]]
     if spec.get("assumptions"):

@@ -21,8 +21,10 @@ from ..db import now_iso
 from ..errors import ApiError
 from ..jobs import JobContext, JobFailed
 from ..services.testing import RunRequest
-from .store import (BASELINE, DONE, FAILED, FINAL, FINISHED, GOALS, QUEUED, REPORT, RUNNING, STOPPED, WAITING,
-                    OptimizationStore)
+from ..pipeline.spec import spec_for_coder
+from ..remediate.fixer import code_diff
+from .store import (ANALYSE, BASELINE, BUILD, DONE, FAILED, FINAL, FINISHED, GOALS, QUEUED, REPORT, RUNNING,
+                    STOPPED, VARIANT, WAITING, OptimizationStore)
 
 log = logging.getLogger("aeisp.optimize")
 
@@ -38,7 +40,8 @@ class OptimizationEngine:
         self.s = services
         self.settings = settings
         self.store = OptimizationStore(settings.db_path)
-        self.handlers: Dict[str, Callable] = {BASELINE: self.stage_baseline, REPORT: self.stage_report}
+        self.handlers: Dict[str, Callable] = {BASELINE: self.stage_baseline, ANALYSE: self.stage_analyse,
+                                              VARIANT: self.stage_variant, REPORT: self.stage_report}
         services.jobs.register("optimization", self._run_job, "ai")
 
     def recover(self) -> int:
@@ -173,6 +176,90 @@ class OptimizationEngine:
         return self.after_baseline(o)
 
     def after_baseline(self, o: dict) -> str:
+        return ANALYSE
+
+    # ------------------------------------------------------------ analyse: the Performance agent
+    def target_of(self, o: dict, bench: dict) -> Optional[str]:
+        if o["goal"] != "speed":
+            return None
+        cmds = bench["result"]["commands"]
+        if o["target"]:
+            if o["target"] not in cmds:
+                raise StageFailed(f"the benchmark has no command {o['target']!r} (it has {sorted(cmds)})")
+            return o["target"]
+        timed = {n: (c["device_us"] or c["host_ms"])["median"] for n, c in cmds.items() if n != "ping"}
+        return max(timed, key=timed.get) if timed else None
+
+    def _numbers(self, bench: dict, size: dict) -> str:
+        lines = [f"flash {size.get('flash_bytes')} bytes, RAM {size.get('ram_bytes')} bytes"]
+        for n, c in bench["result"]["commands"].items():
+            if c.get("device_us"):
+                lines.append(f"{n} ({c['command']}): {c['device_us']['median']} us on the device "
+                             f"(stdev {c['device_us']['stdev']}), host round trip {c['host_ms']['median']} ms")
+            else:
+                lines.append(f"{n} ({c['command']}): host round trip {c['host_ms']['median']} ms (no device timing)")
+        return "\n".join(lines)
+
+    def stage_analyse(self, o: dict, log_fn) -> str:
+        bench = self.s.profiling.run(o["base_run_id"])
+        target = self.target_of(o, bench)
+        st = o["state"]
+        goal = {"speed": f"make {target!r} ({bench['result']['commands'][target]['command']}) faster on the device"
+                if target else "make the app commands faster", "flash": "use less flash", "ram": "use less RAM"}[o["goal"]]
+        task = [f"Project '{o['project']}', build #{o['base_build']} (on the board). Goal: {goal}, by at least "
+                f"{o['min_gain_pct']:g} %, without changing any reply.", "", "Measured baseline:",
+                self._numbers(bench, st["base_size"])]
+        if st.get("tried"):
+            task += ["", "Variants already tried and REJECTED (do not propose them again):"]
+            task += [f"- {x['proposal']}: {x['why']}" for x in st["tried"]]
+        task += ["", "Read the sources and the size report of the build. Propose exactly ONE alternative "
+                     "implementation that reaches the goal: say precisely what to change (function, lines) and the "
+                     "effect you expect. Put it first in 'improvements'."]
+        res = self.s.agents.run_inline("performance", "\n".join(task), f"optimisation:{o['id']}",
+                                       {"optimization_id": o["id"]}, log_fn)
+        runs = st.get("agent_runs", []) + [{"run_id": res["child_run_id"], "agent": "performance",
+                                            "outcome": res["outcome"], "tokens": res.get("tokens", 0)}]
+        self.store.set_state(o["id"], agent_runs=runs, target=target)
+        if res["status"] == "FAILED" or (res.get("error") or "").startswith("the model failed"):
+            raise StageFailed(f"the performance agent could not work: {(res.get('error') or '')[:300]}")
+        ideas = (res.get("report") or {}).get("improvements") or []
+        if not ideas:
+            raise StageFailed("the performance agent found nothing to improve", "no_idea")
+        self.store.set_state(o["id"], proposal=ideas[0], analysis=(res.get("report") or {}).get("summary"))
+        self.event(o, "done", f"performance agent run {res['child_run_id']}: {ideas[0][:200]}",
+                   {"improvements": ideas[:5]}, log_fn)
+        return VARIANT
+
+    # ------------------------------------------------------------ variant: the Firmware agent
+    def stage_variant(self, o: dict, log_fn) -> str:
+        st = o["state"]
+        spec = self.s.tests.latest_spec(o["project"])
+        task = [f"Optimise project '{o['project']}' (it is build #{o['base_build']}). Make exactly this change:",
+                st["proposal"], "",
+                "Every reply must stay byte-for-byte the same for every input (the same checks run before and "
+                "after), and the code must stay safe (the security scan runs again). Change nothing else."]
+        if st.get("retry_note"):
+            task += ["", "YOUR PREVIOUS ATTEMPT:", st["retry_note"]]
+        if spec:
+            task += ["", "--- the specification the replies must still meet ---", spec_for_coder(spec)]
+        res = self.s.agents.run_inline("firmware", "\n".join(task), f"optimisation:{o['id']}",
+                                       {"optimization_id": o["id"]}, log_fn)
+        runs = st.get("agent_runs", []) + [{"run_id": res["child_run_id"], "agent": "firmware",
+                                            "outcome": res["outcome"], "tokens": res.get("tokens", 0)}]
+        self.store.set_state(o["id"], agent_runs=runs, retry_note=None)
+        if res["status"] == "FAILED" or (res.get("error") or "").startswith("the model failed"):
+            raise StageFailed(f"the firmware agent could not work: {(res.get('error') or '')[:300]}")
+        before = {k: v for k, v in self.s.analysis.build_sources(o["base_build"]).items() if k.endswith((".c", ".h"))}
+        diff = code_diff(before, self.s.analysis.project_sources(o["project"]))
+        self.store.update(o["id"], diff_text=diff["diff"], variants_tried=o["variants_tried"] + 1)
+        self.store.set_state(o["id"], diff_stats={k: diff[k] for k in ("files", "added", "removed")})
+        if not diff["files"]:
+            raise StageFailed("the firmware agent did not change any code", "no_change")
+        self.event(o, "done", f"variant {o['variants_tried'] + 1}: {', '.join(diff['files'])} changed "
+                              f"(+{diff['added']} -{diff['removed']})", {"diff": diff["diff"][:4000]}, log_fn)
+        return self.after_variant(o)
+
+    def after_variant(self, o: dict) -> str:
         return REPORT
 
     # ------------------------------------------------------------ report
