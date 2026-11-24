@@ -91,6 +91,8 @@ def judge(obs: Observation, slow_ms: float = 500.0) -> List[Verdict]:
                                         "ERR 7 TIMEOUT"))
         return out
     if obs.reply is None:
+        if obs.alive_after and not restarted and obs.text.strip(" ") == "" and not obs.reset_reason:
+            return []                     # the harness ignores blank lines on purpose: no reply is correct
         if obs.alive_after is False:
             return [_v("dead", f"no reply ({obs.error or 'nothing'}) and the board did not come back")]
         if obs.reset_reason == "WATCHDOG_TIMEOUT":

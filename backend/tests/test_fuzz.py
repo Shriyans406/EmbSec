@@ -76,6 +76,10 @@ def test_oracle_rules():
                                     reset_reason="WATCHDOG_TIMEOUT"))] == ["hang"]
     assert [v.kind for v in judge(O("X", "b", error="timeout", alive_after=False))] == ["dead"]
     assert [v.kind for v in judge(O("X", "b", error="timeout", alive_after=True))] == ["dropped"]
+    for blank in ("", "   "):                         # found on the real board: blank lines get no reply by design
+        assert judge(O(blank, "malformed", error="timeout", alive_after=True)) == []
+    assert [v.kind for v in judge(O("", "m", error="timeout", alive_after=False))] == ["dead"]
+    assert [v.kind for v in judge(O("\t", "m", error="timeout", alive_after=True))] == ["dropped"]
     assert [v.kind for v in judge(O("PING", "b", reply="OK PONG", uptime_before=900, uptime_after=5))] == ["crash"]
     assert [v.kind for v in judge(O("#5 PING", "m", reply="OK PONG"))] == ["id_mismatch"]
     assert judge(O("#5 PING", "m", reply="#5 OK PONG")) == []
