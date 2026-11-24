@@ -24,8 +24,11 @@ from ..fuzz.repro import reproduce
 from ..jobs import JobContext, JobFailed
 from ..services.testing import RunRequest
 from .fixer import code_diff, debug_task, root_cause_of
-from .store import (DONE, FAILED, FINAL, FINISHED, FIX, INSPECT, QUEUED, REPORT, REPRODUCE, RUNNING, STOPPED,
-                    RemediationStore)
+from ..build.engine import SUCCESS as BUILD_SUCCESS
+from ..jobs import AWAITING
+from ..jobs import FINAL as JOB_FINAL
+from .store import (BUILD, DEPLOYED, DONE, FAILED, FINAL, FINISHED, FIX, INSPECT, PROPOSE, QUEUED, REPORT, REPRODUCE,
+                    RETEST, RUNNING, SCAN, STOPPED, WAITING, RemediationStore)
 
 log = logging.getLogger("aeisp.remediate")
 
@@ -44,7 +47,9 @@ class RemediationEngine:
         self.recover_s: Optional[float] = None
         self.sleep = None
         self.handlers: Dict[str, Callable] = {REPRODUCE: self.stage_reproduce, INSPECT: self.stage_inspect,
-                                              FIX: self.stage_fix,
+                                              FIX: self.stage_fix, BUILD: self.stage_build, SCAN: self.stage_scan,
+                                              PROPOSE: self.stage_propose, DEPLOYED: self.stage_deployed,
+                                              RETEST: self.stage_retest,
                                               REPORT: self.stage_report}
         services.jobs.register("remediation", self._run_job, "ai")
 
@@ -71,6 +76,35 @@ class RemediationEngine:
 
     def get(self, rid: int) -> dict:
         return self.store.get(rid)
+
+    def _pending_job(self, r: dict) -> Optional[int]:
+        return r["rollback_job_id"] if r["stage"] in ("rolled_back",) else r["deploy_job_id"]
+
+    def resume(self, rid: int, who: str) -> dict:
+        r = self.get(rid)
+        if r["status"] != WAITING:
+            raise ApiError(409, "not_waiting", f"remediation {rid} is {r['status']}, not waiting")
+        jid = self._pending_job(r)
+        job = self.s.jobs.get(jid) if jid else None
+        if job is not None and job["status"] == AWAITING:
+            raise ApiError(409, "still_awaiting_approval",
+                           f"proposal job #{job['id']} still waits for a human; approve or reject it first")
+        self.store.update(rid, status=QUEUED)
+        job = self.s.jobs.submit("remediation", {"remediation_id": rid}, who, summary=f"resume remediation {rid}")
+        return {**self.get(rid), "job_id": job["id"]}
+
+    def stop(self, rid: int, who: str) -> dict:
+        r = self.get(rid)
+        if r["status"] in FINAL:
+            raise ApiError(409, "remediation_finished", f"remediation {rid} is already {r['status']}")
+        self.store.update(rid, stop_requested=1)
+        if r["status"] == WAITING:
+            self.store.update(rid, stage=REPORT, outcome="stopped", error=f"stopped by {who}")
+            try:
+                self.drive(rid, lambda t: None)
+            except JobFailed:
+                pass
+        return self.get(rid)
 
     # ------------------------------------------------------------ the loop
     def _run_job(self, ctx: JobContext) -> dict:
@@ -208,6 +242,111 @@ class RemediationEngine:
         return self.after_fix(r)
 
     def after_fix(self, r: dict) -> str:
+        return BUILD
+
+    def _fix_round(self, r: dict, why: str, note: str, log_fn) -> str:
+        rounds, limit = r["fix_rounds"] + 1, r["params"].get("max_fix_rounds", 2)
+        if rounds > limit:
+            raise StageFailed(f"{why}, and {limit} fix rounds did not solve it", "fix_failed")
+        self.store.update(r["id"], fix_rounds=rounds)
+        self.store.set_state(r["id"], retry_note=note)
+        self.event(r, "fix", f"{why}: back to the debugger (round {rounds} of {limit})", log_fn=log_fn)
+        return FIX
+
+    # ------------------------------------------------------------ build, scan
+    def stage_build(self, r: dict, log_fn) -> str:
+        job = self.s.jobs.wait(self.s.builds.start(r["project"], f"remediation:{r['id']}")["id"], 1200)
+        res = job.get("result") or {}
+        builds = r["state"].get("builds", []) + [{"build_id": res.get("id"), "status": res.get("status"),
+                                                  "errors": res.get("errors")}]
+        self.store.set_state(r["id"], builds=builds)
+        if res.get("status") == BUILD_SUCCESS:
+            self.store.update(r["id"], after_build=res["id"])
+            self.event(r, "done", f"build #{res['id']} SUCCESS", {"build_id": res["id"]}, log_fn)
+            return SCAN
+        if res.get("status") != "FAILED":
+            raise StageFailed(f"the build could not run: {job.get('error')}")
+        errors = [d for d in res.get("diagnostics", []) if d.get("severity") == "error"][:15]
+        text = "\n".join(f"- {d.get('file')}:{d.get('line')}: {d.get('message')}" for d in errors)
+        return self._fix_round(r, f"build #{res.get('id')} failed", f"The fixed code does not compile:\n{text}", log_fn)
+
+    def stage_scan(self, r: dict, log_fn) -> str:
+        scan = self.s.analysis.security_scan(build_id=r["after_build"])
+        self.store.set_state(r["id"], scan_after={"verdict": scan["verdict"], "counts": scan["counts"]})
+        if scan["verdict"] == "PASS":
+            self.event(r, "done", f"security scan of build #{r['after_build']}: PASS", log_fn=log_fn)
+            return PROPOSE
+        bad = [f for f in scan["findings"] if f["severity"] in ("critical", "high")][:10]
+        text = "\n".join(f"- {f['file']}:{f['line']} [{f['rule']}] {f['title']} -> {f['advice']}" for f in bad)
+        return self._fix_round(r, f"build #{r['after_build']} fails the security scan",
+                               f"The fix introduced security problems:\n{text}", log_fn)
+
+    # ------------------------------------------------------------ deployment: a human decides
+    def stage_propose(self, r: dict, log_fn) -> Optional[str]:
+        try:
+            job = self.s.deploys.propose_deploy(r["after_build"], f"remediation:{r['id']}")
+        except ApiError as e:
+            raise StageFailed(f"build #{r['after_build']} has the fix, but its deployment could not be proposed: "
+                              f"{e.message}", "not_deployed")
+        self.store.update(r["id"], deploy_job_id=job["id"], stage=DEPLOYED, status=WAITING)
+        self.event({**r, "stage": PROPOSE}, "waiting", f"deployment of the fixed build #{r['after_build']} proposed "
+                   f"as job #{job['id']}; waiting for a human (confirm text '{job['confirm_token']}')",
+                   {"job_id": job["id"]}, log_fn)
+        return None
+
+    def _job_decided(self, r: dict, job_id: int) -> Optional[dict]:
+        job = self.s.jobs.get(job_id)
+        if job is None:
+            raise StageFailed(f"proposal job #{job_id} has disappeared")
+        if job["status"] == AWAITING:
+            self.store.update(r["id"], status=WAITING)
+            return None
+        if job["status"] not in JOB_FINAL:
+            job = self.s.jobs.wait(job_id, 900)
+        self.store.update(r["id"], status=RUNNING)
+        return job
+
+    def stage_deployed(self, r: dict, log_fn) -> Optional[str]:
+        job = self._job_decided(r, r["deploy_job_id"])
+        if job is None:
+            return None
+        if job["status"] == "SUCCEEDED":
+            self.event(r, "done", f"build #{r['after_build']} is on the board (approved by {job.get('approved_by')})",
+                       log_fn=log_fn)
+            return RETEST
+        if job["status"] in ("REJECTED", "EXPIRED", "CANCELLED"):
+            raise StageFailed(f"the fix was not deployed: job #{job['id']} {job['status']}", "not_deployed")
+        raise StageFailed(f"the deployment of the fix failed (the deploy engine rolled back): {job.get('error')}",
+                          "deploy_failed")
+
+    # ------------------------------------------------------------ the original bug, again
+    def stage_retest(self, r: dict, log_fn) -> str:
+        f = self.s.fuzz.finding(r["finding_id"])
+        inputs = [f["minimized"] or f["input_text"]] + ([f["input_text"]] if f["minimized"] else [])
+        results = []
+        with self.s.device.session(f"remediation #{r['id']} retest") as send:
+            board = self._board(send)
+            if not board.recover():
+                raise StageFailed("the board does not answer PING after the deployment")
+            fw = board.firmware()
+            if fw.get("build_id") != r["after_build"]:
+                raise StageFailed(f"the board runs build #{fw.get('build_id')}, not the fix #{r['after_build']}")
+            for text in dict.fromkeys(inputs):
+                rep = reproduce(board, {**f, "input_text": text}, 5 if text == inputs[0] else 2)
+                results.append({"input": text, "hits": rep["hits"], "attempts": rep["attempts"]})
+            board.recover()
+        self.store.set_state(r["id"], retest=results)
+        hits = sum(x["hits"] for x in results)
+        if hits:
+            note = "; ".join(f"{x['input']!r} still fails {x['hits']} of {x['attempts']} times" for x in results)
+            return self._fix_round(r, f"the bug still happens on build #{r['after_build']}",
+                                   f"On the board, with your fix (build #{r['after_build']}): {note}.", log_fn)
+        self.event(r, "done", "the original bug is gone: " + ", ".join(f"{x['input']!r} 0/{x['attempts']}"
+                                                                        for x in results), {"retest": results}, log_fn)
+        return self.after_retest(r)
+
+    def after_retest(self, r: dict) -> str:
+        self.store.update(r["id"], outcome="fixed")
         return REPORT
 
     # ------------------------------------------------------------ report
