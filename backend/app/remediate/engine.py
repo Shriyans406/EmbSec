@@ -27,8 +27,9 @@ from .fixer import code_diff, debug_task, root_cause_of
 from ..build.engine import SUCCESS as BUILD_SUCCESS
 from ..jobs import AWAITING
 from ..jobs import FINAL as JOB_FINAL
-from .store import (BUILD, DEPLOYED, DONE, FAILED, FINAL, FINISHED, FIX, INSPECT, PROPOSE, QUEUED, REPORT, REPRODUCE,
-                    RETEST, RUNNING, SCAN, STOPPED, WAITING, RemediationStore)
+from .store import (BUILD, DECIDE, DEPLOYED, DONE, FAILED, FINAL, FINISHED, FIX, INSPECT, PROPOSE, QUEUED,
+                    REGRESSION, REPORT, REPRODUCE, RETEST, ROLLBACK, ROLLED_BACK, RUNNING, SCAN, STOPPED, WAITING,
+                    RemediationStore)
 
 log = logging.getLogger("aeisp.remediate")
 
@@ -49,7 +50,9 @@ class RemediationEngine:
         self.handlers: Dict[str, Callable] = {REPRODUCE: self.stage_reproduce, INSPECT: self.stage_inspect,
                                               FIX: self.stage_fix, BUILD: self.stage_build, SCAN: self.stage_scan,
                                               PROPOSE: self.stage_propose, DEPLOYED: self.stage_deployed,
-                                              RETEST: self.stage_retest,
+                                              RETEST: self.stage_retest, REGRESSION: self.stage_regression,
+                                              DECIDE: self.stage_decide, ROLLBACK: self.stage_rollback,
+                                              ROLLED_BACK: self.stage_rolled_back,
                                               REPORT: self.stage_report}
         services.jobs.register("remediation", self._run_job, "ai")
 
@@ -346,7 +349,83 @@ class RemediationEngine:
         return self.after_retest(r)
 
     def after_retest(self, r: dict) -> str:
-        self.store.update(r["id"], outcome="fixed")
+        return REGRESSION
+
+    # ------------------------------------------------------------ nothing else may break
+    QUICK_FUZZ = {"families": ["boundary", "invalid", "overflow", "oversize"], "max_inputs": 150, "max_resets": 2}
+
+    def stage_regression(self, r: dict, log_fn) -> str:
+        baseline = r["state"].get("baseline", {})
+        after = self.run_suites(list(baseline), f"remediation:{r['id']}")
+        regressions, compared = [], {}
+        for name, base in baseline.items():
+            new = after.get(name, {})
+            if not (base.get("run_id") and new.get("run_id")):
+                continue
+            cmp = self.s.tests.compare(base["run_id"], new["run_id"])
+            compared[name] = {"verdict": cmp["verdict"], "counts": cmp["counts"],
+                              "regressed": [x["name"] for x in cmp["regressed"]]}
+            regressions += [{"suite": name, "case": x["name"], "before": x["before"], "after": x["after"]}
+                            for x in cmp["regressed"]]
+        fuzz = None
+        if r["params"].get("fuzz_check", True):
+            f = self.s.fuzz.finding(r["finding_id"])
+            camp = self.s.fuzz.start(f"remediation:{r['id']}", r["project"], self.QUICK_FUZZ["families"], seed=1,
+                                     max_inputs=self.QUICK_FUZZ["max_inputs"],
+                                     max_resets=self.QUICK_FUZZ["max_resets"])
+            self.s.jobs.wait(camp["job_id"], 900)
+            found = self.s.fuzz.store.findings(campaign_id=camp["id"], min_severity="medium")
+            fuzz = {"campaign_id": camp["id"], "serious": [{k: x[k] for k in ("id", "kind", "severity", "input_text")}
+                                                         for x in found]}
+        self.store.set_state(r["id"], after_suites=after, regression=compared, regressions=regressions,
+                             fuzz_check=fuzz)
+        self.event(r, "done" if not regressions else "warning",
+                   f"{len(regressions)} regressions in {len(compared)} suites"
+                   + (f", quick fuzz: {len(fuzz['serious'])} serious findings" if fuzz else ""),
+                   {"regressions": regressions, "fuzz": fuzz}, log_fn)
+        return DECIDE
+
+    # ------------------------------------------------------------ accept, or reject and roll back
+    def stage_decide(self, r: dict, log_fn) -> str:
+        st = r["state"]
+        reasons = [f"{x['suite']}/{x['case']}: {x['before']!r} -> {x['after']!r}" for x in st.get("regressions", [])]
+        reasons += [f"fuzz finding #{x['id']} {x['kind']} on {x['input_text'][:40]!r}"
+                    for x in (st.get("fuzz_check") or {}).get("serious", [])]
+        if not reasons:
+            self.s.fuzz.set_status(r["finding_id"], "fixed")
+            self.store.update(r["id"], outcome="fixed")
+            self.event(r, "done", f"fix ACCEPTED: the bug is gone on build #{r['after_build']} and nothing regressed; "
+                                  f"finding #{r['finding_id']} is marked fixed", log_fn=log_fn)
+            return REPORT
+        self.store.set_state(r["id"], rejection=reasons)
+        self.event(r, "warning", "fix REJECTED: " + "; ".join(reasons[:5]), {"reasons": reasons}, log_fn)
+        return ROLLBACK
+
+    def stage_rollback(self, r: dict, log_fn) -> Optional[str]:
+        self.s.firmware.restore_sources(r["project"], r["before_build"])
+        try:
+            job = self.s.deploys.propose_deploy(r["before_build"], f"remediation:{r['id']} rollback")
+        except ApiError as e:
+            self.store.update(r["id"], outcome="rejected_not_rolled_back",
+                              error=f"the rollback to build #{r['before_build']} could not be proposed: {e.message}")
+            return REPORT
+        self.store.update(r["id"], rollback_job_id=job["id"], stage=ROLLED_BACK, status=WAITING)
+        self.event({**r, "stage": ROLLBACK}, "waiting",
+                   f"sources restored to build #{r['before_build']}; its redeployment is proposed as job #{job['id']} "
+                   f"(confirm text '{job['confirm_token']}')", {"job_id": job["id"]}, log_fn)
+        return None
+
+    def stage_rolled_back(self, r: dict, log_fn) -> Optional[str]:
+        job = self._job_decided(r, r["rollback_job_id"])
+        if job is None:
+            return None
+        if job["status"] == "SUCCEEDED":
+            self.store.update(r["id"], outcome="rejected_rolled_back")
+            self.event(r, "done", f"rolled back: the board runs build #{r['before_build']} again", log_fn=log_fn)
+        else:
+            self.store.update(r["id"], outcome="rejected_not_rolled_back",
+                              error=f"the rollback was not made (job #{job['id']} {job['status']}); the board still "
+                                    f"runs the rejected build #{r['after_build']}")
         return REPORT
 
     # ------------------------------------------------------------ report
