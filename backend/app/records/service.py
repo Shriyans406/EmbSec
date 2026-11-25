@@ -7,6 +7,7 @@ from pathlib import Path
 from ..errors import ApiError
 from .record import build_record, timeline
 from .replay import run_rebuild, start_rebuild, verify
+from .report import to_markdown, to_pdf
 
 
 class RecordService:
@@ -52,3 +53,26 @@ class RecordService:
 
     def rebuild(self, build_id: int, who: str) -> dict:
         return start_rebuild(self.s, build_id, who)
+
+    # ------------------------------------------------------------ reports
+    def report(self, kind: str, task_id: int, fmt: str = "md"):
+        """(content, media type, file name) of a verified report in json, md or pdf."""
+        if fmt not in ("json", "md", "pdf"):
+            raise ApiError(422, "bad_format", "format must be json, md or pdf")
+        rec = self.take(kind, task_id)
+        ver = verify(rec, self.s)
+        name = f"{kind}-{task_id}"
+        if fmt == "json":
+            return json.dumps({**rec, "verification": ver}, default=str, indent=1), "application/json", f"{name}.json"
+        md = to_markdown(rec, ver)
+        if fmt == "md":
+            return md, "text/markdown; charset=utf-8", f"{name}.md"
+        return to_pdf(md, f"AEISP - {kind.replace('_', ' ')} {task_id}"), "application/pdf", f"{name}.pdf"
+
+    def save_report(self, kind: str, task_id: int, fmt: str = "pdf") -> dict:
+        content, _, name = self.report(kind, task_id, fmt)
+        d = self.s.settings.root / "data" / "reports"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / name
+        path.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+        return {"path": str(path), "bytes": path.stat().st_size}
