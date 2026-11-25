@@ -379,6 +379,15 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
             INSERT INTO knowledge_fts (rowid, title, body, tags, project)
             VALUES (new.id, new.title, new.body, new.tags, new.project); END""",
     ]),
+    (13, "audit_chain", [
+        "ALTER TABLE audit_log ADD COLUMN prev_hash TEXT",
+        "ALTER TABLE audit_log ADD COLUMN hash TEXT",
+        # entries that are part of the chain can never be changed or removed
+        """CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_log WHEN old.hash IS NOT NULL
+            BEGIN SELECT RAISE(ABORT, 'the audit log is append-only'); END""",
+        """CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_log WHEN old.hash IS NOT NULL
+            BEGIN SELECT RAISE(ABORT, 'the audit log is append-only'); END""",
+    ]),
 ]
 
 
