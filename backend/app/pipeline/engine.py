@@ -35,7 +35,6 @@ from .store import (BUILD, CODE, DEPLOYED, DONE, FAILED, FINAL, FINISHED, PROPOS
 
 log = logging.getLogger("aeisp.pipeline")
 
-WHO = "pipeline"
 
 
 class StageFailed(Exception):
@@ -167,7 +166,7 @@ class PipelineEngine:
         return CODE
 
     def stage_build(self, p: dict, log_fn) -> str:
-        job = self.s.builds.start(p["project"], WHO)
+        job = self.s.builds.start(p["project"], f"pipeline:{p['id']}")
         job = self.s.jobs.wait(job["id"], 1200)
         res = job.get("result") or {}
         builds = p["state"].get("builds", []) + [{"build_id": res.get("id"), "status": res.get("status"),
