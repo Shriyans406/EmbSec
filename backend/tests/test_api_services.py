@@ -419,7 +419,7 @@ def call(client, name, args=None, role="agent"):
 def test_tool_lists_depend_on_role(client):
     viewer = client.get("/tools", headers=auth("viewer")).json()
     agent = client.get("/tools", headers=auth("agent")).json()
-    assert len(viewer) == 30 and len(agent) == 49
+    assert len(viewer) == 33 and len(agent) == 54
     assert all(t["min_role"] == "viewer" for t in viewer)
     ws = next(t for t in agent if t["name"] == "write_source")
     assert set(ws["parameters"]["required"]) == {"project", "filename", "content"} and ws["risk"] == "write"
@@ -483,9 +483,9 @@ def test_propose_deployment_tool_never_flashes(client, services, board):
 
 def test_function_declarations_suit_the_gemini_api(services):
     decls = services.tools.declarations(Principal("agent", "agent"))
-    assert len(decls) == 49
+    assert len(decls) == 54
     text = json.dumps(decls)
-    for junk in ('"title"', '"default"', '$ref', '"anyOf"', 'additionalProperties'):
+    for junk in ('"title": "', '"default": ', '$ref', '"anyOf"', 'additionalProperties'):   # keywords, not names
         assert junk not in text, junk
     for d in decls:
         assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", d["name"]) and d["description"]

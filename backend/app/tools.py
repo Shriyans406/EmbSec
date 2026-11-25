@@ -225,6 +225,36 @@ class OptimizationArg(BaseModel):
     optimization_id: int = Field(ge=1)
 
 
+class KnowledgeSearchArgs(BaseModel):
+    query: str = Field(min_length=2, max_length=500, description="words to look for, e.g. 'division by zero hang'")
+    kind: Optional[Literal["bug", "fix", "benchmark", "optimisation", "decision", "build_failure", "test_failure",
+                           "spec", "note"]] = None
+    project: Optional[str] = None
+
+
+class KnowledgeIdArg(BaseModel):
+    entry_id: int = Field(ge=1)
+
+
+class TimelineArgs(BaseModel):
+    project: str
+    limit: int = Field(50, ge=1, le=200)
+
+
+class DecisionArgs(BaseModel):
+    title: str = Field(min_length=3, max_length=200)
+    context: str = Field(min_length=3, max_length=3000)
+    decision: str = Field(min_length=3, max_length=3000)
+    consequences: str = Field("", max_length=3000)
+    project: Optional[str] = None
+
+
+class NoteArgs(BaseModel):
+    title: str = Field(min_length=3, max_length=200)
+    body: str = Field(min_length=3, max_length=6000)
+    project: Optional[str] = None
+
+
 class ReproArgs(FindingArg):
     attempts: int = Field(3, ge=1, le=10)
     minimise: bool = Field(True, description="shrink the input to the smallest one that still fails")
@@ -507,7 +537,38 @@ def build_registry(s) -> ToolRegistry:
                                                  a.max_variants)))
     T(Tool("get_optimization", "An optimisation: stage, variants tried and why they were rejected, A/B result.",
            OptimizationArg, "viewer", "read", lambda s, p, a: s.optimizations.get(a.optimization_id)))
+    T(Tool("search_knowledge", "Search what the lab learned before: bugs (with their minimised inputs), fixes (root "
+           "cause + diff), benchmarks, optimisations, failed builds and tests, decisions. Best matches first.",
+           KnowledgeSearchArgs, "viewer", "read", lambda s, p, a: s.knowledge.search(a.query, a.kind, a.project)))
+    T(Tool("get_knowledge", "One knowledge entry in full, with the record and build it came from.",
+           KnowledgeIdArg, "viewer", "read", lambda s, p, a: s.knowledge.store.get(a.entry_id)))
+    T(Tool("project_timeline", "A project's history, newest first: builds, deployments, tests, fuzzing, fixes, "
+           "benchmarks, optimisations, pipelines, decisions.",
+           TimelineArgs, "viewer", "read", lambda s, p, a: _timeline(s, a)))
+    T(Tool("record_decision", "Write down an engineering decision (context, decision, consequences) so later tasks "
+           "find it.", DecisionArgs, "agent", "write",
+           lambda s, p, a: _decision(s, p, a)))
+    T(Tool("add_knowledge_note", "Write down a lesson that the records do not show by themselves.",
+           NoteArgs, "agent", "write", lambda s, p, a: _note(s, p, a)))
     return r
+
+
+def _timeline(s, a):
+    from .knowledge.history import timeline
+
+    return timeline(s.settings.db_path, a.project, a.limit)
+
+
+def _decision(s, p, a):
+    from .knowledge.history import add_decision
+
+    return add_decision(s.knowledge.store, a.title, a.context, a.decision, a.consequences, a.project, _who(p))
+
+
+def _note(s, p, a):
+    from .knowledge.history import add_note
+
+    return add_note(s.knowledge.store, a.title, a.body, a.project, _who(p))
 
 
 def _save_benchmark(s, p, a: SaveBenchmarkArgs):

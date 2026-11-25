@@ -20,6 +20,7 @@ READ_BUILDS = ["get_build", "build_history"]
 JOBS = ["get_job", "get_job_logs", "wait_for_job"]
 BENCH = ["list_benchmarks", "save_benchmark", "run_benchmark", "get_benchmark_run",
          "compare_benchmark_runs", "benchmark_vs_baseline", "benchmark_history"]
+MEMORY = ["search_knowledge", "get_knowledge"]
 FUZZ = ["start_fuzz", "get_fuzz_campaign", "list_fuzz_findings", "get_fuzz_finding", "reproduce_finding"]
 
 
@@ -87,14 +88,15 @@ DEBUG_SCHEMA = _schema({
 SUPERVISOR = AgentSpec(
     "supervisor", "supervisor",
     ["list_projects", "list_sources", "build_history", "get_build", "deployment_history", "list_test_runs",
-     "device_status", "list_fuzz_findings", "get_remediation", "get_optimization"],
+     "device_status", "list_fuzz_findings", "get_remediation", "get_optimization", "search_knowledge",
+     "get_knowledge", "project_timeline", "record_decision"],
     "plans the work and delegates to the specialists", max_steps=30, extra={"delegates": True})
 
 TEAM: Dict[str, AgentSpec] = {s.name: s for s in [
     SUPERVISOR,
     AgentSpec("firmware", "firmware_agent",
               READ_CODE + ["create_project", "write_source", "delete_source", "restore_sources", "security_scan"]
-              + READ_BUILDS,
+              + READ_BUILDS + MEMORY,
               "writes and fixes application code", max_steps=16,
               report_prompt="specialist_report", report_schema=FIRMWARE_SCHEMA),
     AgentSpec("build", "build_agent",
@@ -103,16 +105,16 @@ TEAM: Dict[str, AgentSpec] = {s.name: s for s in [
                  "device_command"],
               "builds, proposes deployments and checks the running build", max_steps=12,
               report_prompt="specialist_report", report_schema=BUILD_SCHEMA),
-    AgentSpec("security", "security_agent", READ_CODE + READ_BUILDS + ["security_scan"] + FUZZ + JOBS,
+    AgentSpec("security", "security_agent", READ_CODE + READ_BUILDS + ["security_scan"] + FUZZ + JOBS + MEMORY,
               "reviews code and fuzzes the board for security problems (cannot change code)", max_steps=14,
               report_prompt="specialist_report", report_schema=SECURITY_SCHEMA),
     AgentSpec("performance", "performance_agent",
               ["list_sources", "read_source"] + READ_BUILDS + ["size_report", "measure_latency", "device_status",
-                                                               "device_command"] + BENCH + JOBS,
+                                                               "device_command"] + BENCH + JOBS + MEMORY,
               "measures size, speed and load on the board (cannot change code)", max_steps=14,
               report_prompt="specialist_report", report_schema=PERFORMANCE_SCHEMA),
     AgentSpec("debugger", "debug_agent",
-              READ_CODE + ["write_source", "security_scan", "get_fuzz_finding", "list_fuzz_findings"] + READ_BUILDS,
+              READ_CODE + ["write_source", "security_scan", "get_fuzz_finding", "list_fuzz_findings"] + READ_BUILDS + MEMORY,
               "finds the root cause of a reproduced bug and patches it", max_steps=16,
               report_prompt="specialist_report", report_schema=DEBUG_SCHEMA),
     AgentSpec("verification", "verification_agent",
