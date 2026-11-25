@@ -23,6 +23,7 @@ from .api import device as api_device
 from .api import firmware as api_firmware
 from .api import fuzz as api_fuzz
 from .api import knowledge as api_knowledge
+from .api import live as api_live
 from .api import optimizations as api_optimizations
 from .api import pipelines as api_pipelines
 from .api import profiling as api_profiling
@@ -101,6 +102,7 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
     app.include_router(api_profiling.router)
     app.include_router(api_optimizations.router)
     app.include_router(api_knowledge.router)
+    app.include_router(api_live.router)
     return app
 
 

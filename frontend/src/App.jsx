@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, can, get, saveSession, session } from './lib/api'
+import { closeLive, useLive } from './lib/live'
 import { ErrorBox } from './lib/ui'
 import { PAGES } from './pages'
 
@@ -62,6 +63,11 @@ export default function App() {
   }, [])
 
   if (!s) return <Login onLogin={setS} />
+  return <Shell s={s} setS={setS} health={health} page={page} rest={rest} />
+}
+
+function Shell({ s, setS, health, page, rest }) {
+  const live = useLive(null)
   const Page = page.component
   return (
     <div className="shell">
@@ -74,8 +80,9 @@ export default function App() {
         </nav>
         <div className="who">
           <div><span className={`dot ${health ? 'ok' : 'bad'}`} /> backend {health ? `${health.version}` : 'offline'}</div>
+          <div><span className={`dot ${live === 'live' ? 'ok' : 'warn'}`} /> live feed {live}</div>
           <div>role <b>{s.role}</b></div>
-          <button onClick={() => { saveSession(null); setS(null) }}>Sign out</button>
+          <button onClick={() => { closeLive(); saveSession(null); setS(null) }}>Sign out</button>
         </div>
       </aside>
       <main>
