@@ -143,7 +143,8 @@ class PipelineEngine:
         task = spec_for_coder(spec)
         if state.get("fix_task"):
             task = state["fix_task"] + "\n\n--- The specification (unchanged) ---\n" + task
-        res = self.s.agents.run_inline("firmware", task, f"pipeline:{p['id']}", {"pipeline_id": p["id"]}, log_fn)
+        res = self.s.agents.run_inline("firmware", task, f"pipeline:{p['id']}", {"pipeline_id": p["id"]}, log_fn,
+                                       project=spec["project"])
         runs = state.get("agent_runs", []) + [{"run_id": res["child_run_id"], "agent": "firmware",
                                                "outcome": res["outcome"], "tokens": res.get("tokens", 0)}]
         self.store.set_state(p["id"], agent_runs=runs, fix_task=None)

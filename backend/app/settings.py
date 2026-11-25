@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     ai_retries: int = 4                # retries of a model call on 429 / 5xx
     ai_tool_result_chars: int = 6000   # tool results longer than this are cut before the model sees them
     ai_security_gate: bool = True      # agents cannot propose a build that fails the security scan
+    ai_memory: bool = True             # give agents the relevant entries of the knowledge base
+    ai_memory_items: int = 5           # at most this many past entries per task
 
     @property
     def ai_configured(self) -> bool:

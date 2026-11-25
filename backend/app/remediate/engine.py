@@ -226,7 +226,8 @@ class RemediationEngine:
     def stage_fix(self, r: dict, log_fn) -> str:
         state = r["state"]
         task = debug_task(state["evidence"], r["project"], r["before_build"], state.get("retry_note"))
-        res = self.s.agents.run_inline("debugger", task, f"remediation:{r['id']}", {"remediation_id": r["id"]}, log_fn)
+        res = self.s.agents.run_inline("debugger", task, f"remediation:{r['id']}", {"remediation_id": r["id"]}, log_fn,
+                                       project=r["project"])
         runs = state.get("agent_runs", []) + [{"run_id": res["child_run_id"], "outcome": res["outcome"],
                                                "tokens": res.get("tokens", 0)}]
         self.store.set_state(r["id"], agent_runs=runs, retry_note=None)

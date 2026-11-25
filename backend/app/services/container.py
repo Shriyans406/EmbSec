@@ -102,6 +102,7 @@ def build_services(settings: Settings, llm_factory=None) -> Services:
     s.knowledge = KnowledgeService(settings.db_path)
     s.tools = build_registry(s)
     s.agents = AgentService(settings, jobs, s.tools, llm_factory)
+    s.agents.knowledge = s.knowledge
     s.pipelines = PipelineEngine(s, settings)
     s.fuzz = FuzzService(settings.db_path, jobs, device, s.tests, s.pipelines)
     s.remediations = RemediationEngine(s, settings)

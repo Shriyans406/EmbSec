@@ -91,6 +91,7 @@ class AgentService:
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self.checkpointer = SqliteSaver(self._conn)
         self._lock = threading.Lock()
+        self.knowledge = None                  # set by the container (Phase 14)
         jobs.register("agent_run", self._run_job, "ai")
         jobs.register("agent_resume", self._resume_job, "ai")
 
@@ -99,6 +100,19 @@ class AgentService:
         """Called once when the server starts (never when the object is only built: importing the app must not
         change the database). Runs that were active when the server stopped cannot continue."""
         return self.store.recover_orphans()
+
+    def memory(self, run_id: int, text: str, project: Optional[str]) -> str:
+        """Relevant lessons from the knowledge base for this task (and a step that records which ones)."""
+        if not (self.knowledge and self.settings.ai_memory):
+            return ""
+        try:
+            context, ids = self.knowledge.context_for(text, project, self.settings.ai_memory_items)
+        except Exception:  # noqa: BLE001  memory helps; it must never stop a run
+            log.exception("knowledge lookup failed")
+            return ""
+        if ids:
+            self.store.add_step(run_id, "memory", "knowledge", None, {"entries": ids, "project": project})
+        return context
 
     def register(self, spec: AgentSpec) -> None:
         self.specs[spec.name] = spec
@@ -138,11 +152,12 @@ class AgentService:
             raise ApiError(503, "ai_not_configured", "GEMINI_API_KEY is not set in .env; the agents cannot run")
 
     def start(self, goal: str, requested_by: str, agent: str = "lab", max_steps: Optional[int] = None,
-              context: str = "", parent_id: Optional[int] = None) -> dict:
+              context: str = "", parent_id: Optional[int] = None, project: Optional[str] = None) -> dict:
         self._require_model()
         spec = self._spec(agent)
         steps = max_steps or spec.max_steps or self.settings.ai_max_steps
-        run = self.store.create(spec.name, goal, requested_by, steps, {"context": context}, parent_id)
+        run = self.store.create(spec.name, goal, requested_by, steps, {"context": context, "project": project},
+                                parent_id)
         job = self.jobs.submit("agent_run", {"run_id": run["id"]}, requested_by,
                                summary=f"{spec.name} agent: {goal[:80]}")
         return {**self.store.get(run["id"]), "job_id": job["id"]}
@@ -286,7 +301,10 @@ class AgentService:
         ag = self.graph(spec, ctx.log, run["max_steps"])
         self.store.update(run["id"], status=RUNNING, prompts_json=json.dumps(ag.prompt_refs()))
         ctx.log(f"agent run {run['id']} ({spec.name}) started: {run['goal'][:120]}")
-        state = ag.initial_state(run["id"], run["goal"], run["params"].get("context", ""))
+        context = "\n\n".join(x for x in (run["params"].get("context", ""),
+                                             self.memory(run["id"], run["goal"], run["params"].get("project")))
+                                if x)
+        state = ag.initial_state(run["id"], run["goal"], context)
         return self._finish_job(self._invoke(run, ag, state, ctx.log))
 
     def _resume_job(self, ctx: JobContext) -> dict:
@@ -347,7 +365,7 @@ class AgentService:
         return result
 
     def run_inline(self, agent: str, goal: str, requested_by: str, params: Optional[dict] = None,
-                   log_fn=None) -> dict:
+                   log_fn=None, project: Optional[str] = None) -> dict:
         """Run one agent to its end inside the caller's thread (used by the pipeline). Returns its result."""
         self._require_model()
         spec = self._spec(agent)
@@ -356,7 +374,8 @@ class AgentService:
         log_fn = log_fn or (lambda t: None)
         ag = self.graph(spec, log_fn, run["max_steps"])
         self.store.update(run["id"], status=RUNNING, prompts_json=json.dumps(ag.prompt_refs()))
-        out = self._invoke(run, ag, ag.initial_state(run["id"], goal), log_fn)
+        context = self.memory(run["id"], goal, project)
+        out = self._invoke(run, ag, ag.initial_state(run["id"], goal, context), log_fn)
         result = self.child_result(run["id"])
         result["tokens"] = self.usage.totals(run["id"])["total"]
         if out["status"] == WAITING:

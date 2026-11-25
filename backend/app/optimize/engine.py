@@ -252,7 +252,7 @@ class OptimizationEngine:
                      "implementation that reaches the goal: say precisely what to change (function, lines) and the "
                      "effect you expect. Put it first in 'improvements'."]
         res = self.s.agents.run_inline("performance", "\n".join(task), f"optimisation:{o['id']}",
-                                       {"optimization_id": o["id"]}, log_fn)
+                                       {"optimization_id": o["id"]}, log_fn, project=o["project"])
         runs = st.get("agent_runs", []) + [{"run_id": res["child_run_id"], "agent": "performance",
                                             "outcome": res["outcome"], "tokens": res.get("tokens", 0)}]
         self.store.set_state(o["id"], agent_runs=runs, target=target)
@@ -279,7 +279,7 @@ class OptimizationEngine:
         if spec:
             task += ["", "--- the specification the replies must still meet ---", spec_for_coder(spec)]
         res = self.s.agents.run_inline("firmware", "\n".join(task), f"optimisation:{o['id']}",
-                                       {"optimization_id": o["id"]}, log_fn)
+                                       {"optimization_id": o["id"]}, log_fn, project=o["project"])
         runs = st.get("agent_runs", []) + [{"run_id": res["child_run_id"], "agent": "firmware",
                                             "outcome": res["outcome"], "tokens": res.get("tokens", 0)}]
         self.store.set_state(o["id"], agent_runs=runs, retry_note=None)

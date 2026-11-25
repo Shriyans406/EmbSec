@@ -18,6 +18,8 @@ class StartRunBody(BaseModel):
     agent: str = Field("lab", max_length=40, description="which agent (GET /agent/status lists them)")
     max_steps: Optional[int] = Field(None, ge=1, le=60, description="most tool calls for this run")
     context: str = Field("", max_length=8000, description="extra facts for the agent (optional)")
+    project: Optional[str] = Field(None, max_length=32, description="the project the goal is about (for the "
+                                                                     "knowledge base)")
 
 
 def _agents(request: Request):
@@ -40,7 +42,8 @@ def agent_prompts(request: Request, p: Principal = Depends(require("viewer"))) -
 def start_run(body: StartRunBody, request: Request, p: Principal = Depends(require("agent"))) -> dict:
     """Start an agent run (a background job). The agent acts with the AGENT role only: it can build and propose,
     never approve."""
-    return _agents(request).start(body.goal, f"api:{p.name}", body.agent, body.max_steps, body.context)
+    return _agents(request).start(body.goal, f"api:{p.name}", body.agent, body.max_steps, body.context,
+                                  project=body.project)
 
 
 class TeamBody(BaseModel):
