@@ -16,7 +16,7 @@ from .generators import FuzzInput, is_safe
 from .oracle import judge
 
 RESETTING = {"hang", "crash", "dead"}
-MINIMISABLE = {"hang", "crash", "dropped", "garbled", "id_mismatch", "bad_error", "oversized", "slow"}
+MINIMISABLE = {"hang", "crash", "dropped", "garbled", "id_mismatch", "bad_error", "oversized", "slow", "out_of_range"}
 
 
 def as_input(finding: dict, text: Optional[str] = None) -> FuzzInput:
@@ -24,22 +24,23 @@ def as_input(finding: dict, text: Optional[str] = None) -> FuzzInput:
                      finding.get("input_note") or "", finding["partial"], list(finding.get("sequence") or []))
 
 
-def try_once(board: Board, finding: dict, text: Optional[str] = None, slow_ms: float = 500.0) -> Tuple[bool, dict]:
+def try_once(board: Board, finding: dict, text: Optional[str] = None, slow_ms: float = 500.0,
+             rules: Optional[dict] = None) -> Tuple[bool, dict]:
     """Send it once. (did the same kind of anomaly happen, what was seen)."""
     fi = as_input(finding, text)
     obs = observe(board, fi, board.uptime())
-    kinds = [v.kind for v in judge(obs, slow_ms)]
+    kinds = [v.kind for v in judge(obs, slow_ms, rules)]
     return finding["kind"] in kinds, {"text": fi.text, "reply": obs.reply, "error": obs.error, "kinds": kinds,
                                       "reset_reason": obs.reset_reason, "latency_ms": obs.latency_ms}
 
 
-def reproduce(board: Board, finding: dict, attempts: int = 3) -> dict:
+def reproduce(board: Board, finding: dict, attempts: int = 3, rules: Optional[dict] = None) -> dict:
     tries: List[dict] = []
     for _ in range(attempts):
         if not board.recover():
             tries.append({"error": "the board does not answer before the attempt"})
             break
-        hit, seen = try_once(board, finding)
+        hit, seen = try_once(board, finding, rules=rules)
         tries.append({"hit": hit, **seen})
     hits = sum(1 for t in tries if t.get("hit"))
     status = "reproduced" if hits == attempts else ("flaky" if hits else "not_reproduced")
@@ -64,7 +65,7 @@ def _candidates(text: str) -> List[str]:
 
 
 def minimise(board: Board, finding: dict, max_tries: int = 40, max_resets: int = 3,
-             log: Callable[[str], None] = lambda t: None) -> dict:
+             log: Callable[[str], None] = lambda t: None, rules: Optional[dict] = None) -> dict:
     if finding["kind"] not in MINIMISABLE or finding["partial"] or finding.get("sequence"):
         return {"minimized": finding["input_text"], "tries": 0, "resets": 0, "note": "not minimised for this kind"}
     current, tries, resets = finding["input_text"], 0, 0
@@ -78,7 +79,7 @@ def minimise(board: Board, finding: dict, max_tries: int = 40, max_resets: int =
                 return {"minimized": current, "tries": tries, "resets": resets,
                         "note": "the board stopped answering while minimising"}
             tries += 1
-            hit, seen = try_once(board, finding, cand)
+            hit, seen = try_once(board, finding, cand, rules=rules)
             if hit and finding["kind"] in RESETTING:
                 resets += 1
             if hit:

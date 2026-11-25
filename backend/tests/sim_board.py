@@ -14,6 +14,7 @@ Planted bugs
     mul_slow         APP MUL takes 400 us on the board (instead of 40)
     mul_fast         APP MUL takes 12 us on the board
     mul_noisy        APP MUL takes 40..100 us, different in every profiling window (not repeatable)
+    no_range_check   numbers beyond 32 bits are clamped instead of rejected (the real calc2 bug)
 Harness 0.4.0 answers PROF with simulated, repeatable timings (COST below); 0.3.0 does not know PROF.
 `builds` maps a build id to the bugs that build has, so deploying a fixed build changes the behaviour.
 """
@@ -221,6 +222,8 @@ class SimFirmware:
             return self._err(2, "unknown app command")
         if len(args) != 2:
             return self._err(2, f"usage: {cmd} <a> <b>")
+        if "no_range_check" in self.bugs:              # like strtol on a 32-bit long: clamp, never fail
+            args = [str(max(INT32[0], min(INT32[1], int(x)))) if re.fullmatch(r"[+-]?\d+", x) else x for x in args]
         nums = [self._num(x, *INT32) for x in args]
         if None in nums:
             bad = [x for x, n in zip(args, nums) if n is None]

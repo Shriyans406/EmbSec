@@ -190,3 +190,32 @@ def test_fuzz_tools(client, fw):
     assert found.json()["result"][0]["kind"] == "hang"
     assert call("start_fuzz", {"max_inputs": 600}).status_code == 422
     assert call("start_fuzz", {}, "viewer").status_code == 403
+
+
+def test_the_spec_sets_number_ranges_for_the_oracle():
+    from app.fuzz.oracle import INT32, spec_rules
+
+    spec = {"constraints": ["All operations use 32-bit signed integers."],
+            "commands": [{"usage": "APP ADD <a> <b>", "examples": []}, {"usage": "APP", "examples": []}]}
+    assert spec_rules(spec) == {"APP ADD": INT32}
+    by_example = {"commands": [{"usage": "APP DIV <a> <b>", "examples": [
+        {"request": "APP DIV 2147483648 1", "expect": {"kind": "error", "value": "3"}}]}]}
+    assert spec_rules(by_example) == {"APP DIV": INT32}
+    assert spec_rules({"commands": [{"usage": "APP LED <on>", "examples": []}]}) == {} and spec_rules(None) == {}
+    rules = {"APP DIV": INT32}
+    O = Observation
+    found = judge(O("APP DIV 9223372036854775808 1", "overflow", reply="OK quotient=1"), rules=rules)
+    assert [(v.kind, v.severity) for v in found] == [("out_of_range", "medium")] and "CWE-20" in found[0].cwe
+    assert judge(O("APP DIV 2147483648 1", "boundary", reply="ERR 3 BAD_RANGE too big"), rules=rules) == []
+    assert judge(O("APP DIV -2147483648 1", "boundary", reply="OK quotient=-2147483648"), rules=rules) == []
+    assert [v.kind for v in judge(O("APP DIV 9223372036854775808 1", "overflow", reply="OK q=1"))] == ["accepted"]
+
+
+def test_a_campaign_files_out_of_range_numbers_as_bugs(client, services, fw):
+    store = PipelineStore(services.settings.db_path)
+    p = store.create("calc", "t", {})
+    store.update(p["id"], project="calc", spec_json=json.dumps({**SPEC, "constraints": ["32-bit signed integers"]}))
+    fw.bugs.add("no_range_check")
+    job, camp = campaign(client, families=["overflow", "boundary"], max_inputs=300)
+    oor = [f for f in camp["finding_list"] if f["kind"] == "out_of_range"]
+    assert oor and oor[0]["severity"] == "medium"

@@ -175,6 +175,12 @@ class FuzzService:
         self.store.update(cid, stop_requested=1)
         return self.store.get(cid)
 
+    def rules_for(self, project: Optional[str]) -> dict:
+        """What the project's specification says about number ranges (for the oracle)."""
+        from .oracle import spec_rules
+
+        return spec_rules(self.tests.latest_spec(project)) if (self.tests and project) else {}
+
     def inputs_for(self, camp: dict) -> List[FuzzInput]:
         spec, suites = self._context(camp["project"])
         gen = Generator(camp["seed"], corpus_from(spec, suites), command_shapes(spec))
@@ -185,6 +191,7 @@ class FuzzService:
         camp = self.store.get(ctx.params["campaign_id"])
         b = camp["budget"]
         inputs = self.inputs_for(camp)
+        rules = self.rules_for(camp["project"])
         assert all(is_safe(fi.text) for fi in inputs)           # the filter is applied twice, on purpose
         self.store.update(camp["id"], status="RUNNING", started_at=now_iso(), inputs_planned=len(inputs))
         ctx.log(f"campaign {camp['id']}: {len(inputs)} inputs, seed {camp['seed']}, families {camp['families']}")
@@ -215,7 +222,7 @@ class FuzzService:
                 obs = observe(board, fi, uptime)
                 sent += 1
                 by_family[fi.family] = by_family.get(fi.family, 0) + 1
-                verdicts = judge(obs, b["slow_ms"])
+                verdicts = judge(obs, b["slow_ms"], rules)
                 restarted = (obs.uptime_after is not None and uptime is not None and obs.uptime_after < uptime) \
                     or any(v.kind in ("hang", "crash") for v in verdicts)
                 uptime = obs.uptime_after if obs.uptime_after is not None else uptime
@@ -271,12 +278,13 @@ class FuzzService:
             if not board.recover():
                 raise JobFailed("the board does not answer PING")
             fw = board.firmware()
-            rep = reproduce(board, f, p["attempts"])
+            rules = self.rules_for(f["project"])
+            rep = reproduce(board, f, p["attempts"], rules)
             ctx.log(f"finding #{f['id']}: {rep['status']} ({rep['hits']}/{rep['attempts']}) on build "
                     f"#{fw.get('build_id')}")
             mini = {"minimized": f["input_text"], "tries": 0, "resets": 0, "note": "not reproduced"}
             if rep["status"] == "reproduced" and p["minimise"]:
-                mini = minimise(board, f, p["max_tries"], p["max_resets"], ctx.log)
+                mini = minimise(board, f, p["max_tries"], p["max_resets"], ctx.log, rules)
                 ctx.log(f"minimised to {mini['minimized']!r} in {mini['tries']} tries")
             board.recover()
         entry = {"build_id": fw.get("build_id"), "src_hash": fw.get("src_hash"), **rep,

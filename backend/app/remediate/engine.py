@@ -162,7 +162,8 @@ class RemediationEngine:
             if not board.recover():
                 raise StageFailed("the board does not answer PING", "no_board")
             fw = board.firmware()
-            rep = reproduce(board, {**f, "input_text": f["minimized"] or f["input_text"]}, 3)
+            rep = reproduce(board, {**f, "input_text": f["minimized"] or f["input_text"]}, 3,
+                            self.s.fuzz.rules_for(f.get("project")))
             board.recover()
         self.store.set_state(r["id"], reproduction=rep, board_before=fw)
         if not fw.get("build_id"):
@@ -338,7 +339,8 @@ class RemediationEngine:
             if fw.get("build_id") != r["after_build"]:
                 raise StageFailed(f"the board runs build #{fw.get('build_id')}, not the fix #{r['after_build']}")
             for text in dict.fromkeys(inputs):
-                rep = reproduce(board, {**f, "input_text": text}, 5 if text == inputs[0] else 2)
+                rep = reproduce(board, {**f, "input_text": text}, 5 if text == inputs[0] else 2,
+                                self.s.fuzz.rules_for(f.get("project")))
                 results.append({"input": text, "hits": rep["hits"], "attempts": rep["attempts"]})
             board.recover()
         self.store.set_state(r["id"], retest=results)

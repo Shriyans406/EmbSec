@@ -12,6 +12,8 @@ The board can only show trouble in a few ways, and each is checked with plain ru
     no_timeout  an unfinished line was never answered with ERR 7 TIMEOUT
     slow        the reply took longer than the limit
     accepted    an out-of-range or malformed number was accepted with OK (informational)
+    out_of_range the project's specification limits a command's numbers (e.g. 32-bit signed) and a number outside
+                that range was answered with OK instead of an error (rules from spec_rules)
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ from typing import List, Optional
 from ..hardware.protocol import ERROR_NAMES, crc16
 
 SEVERITY = {"dead": "critical", "hang": "high", "crash": "high", "dropped": "medium", "garbled": "medium",
-            "id_mismatch": "medium", "bad_error": "low", "oversized": "low", "no_timeout": "low", "slow": "low",
+            "id_mismatch": "medium", "out_of_range": "medium", "bad_error": "low", "oversized": "low", "no_timeout": "low", "slow": "low",
             "accepted": "info"}
 CWE = {"dead": "CWE-400 uncontrolled resource consumption / denial of service",
        "hang": "CWE-835 loop with unreachable exit (denial of service)",
@@ -34,7 +36,8 @@ CWE = {"dead": "CWE-400 uncontrolled resource consumption / denial of service",
        "oversized": "CWE-130 improper handling of length",
        "no_timeout": "CWE-400 resource held by an unfinished request",
        "slow": "CWE-407 inefficient algorithmic complexity",
-       "accepted": "CWE-20 improper input validation"}
+       "accepted": "CWE-20 improper input validation",
+       "out_of_range": "CWE-20 improper input validation (a number outside the specified range was accepted)"}
 RANK = ["critical", "high", "medium", "low", "info"]
 REPLY_MAX = 256
 _ID = re.compile(r"^#(\d{1,5}) ")
@@ -80,7 +83,33 @@ def request_id(text: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def judge(obs: Observation, slow_ms: float = 500.0) -> List[Verdict]:
+INT32 = (-(2 ** 31), 2 ** 31 - 1)
+_NUM = re.compile(r"^[+-]?\d+$")
+
+
+def spec_rules(spec: Optional[dict]) -> dict:
+    """Number ranges per APP command from a project's specification: {"APP ADD": (lo, hi), ...}.
+    A command gets the 32-bit signed range when the spec says "32-bit", or when one of its error examples uses a
+    number outside that range."""
+    rules: dict = {}
+    if not spec:
+        return rules
+    text = " ".join([spec.get("summary", "") or "", " ".join(spec.get("constraints", []) or [])]).lower()
+    whole = "32-bit" in text or "32 bit" in text or "int32" in text
+    for c in spec.get("commands", []):
+        words = (c.get("usage") or "").split()
+        if len(words) < 3 or words[0].upper() != "APP":
+            continue
+        own = " ".join([c.get("description", "") or "", c.get("usage", "") or ""]).lower()
+        big = any((ex.get("expect") or {}).get("kind") == "error" and any(
+            _NUM.match(w) and not INT32[0] <= int(w) <= INT32[1] for w in ex.get("request", "").split()[2:])
+            for ex in c.get("examples", []))
+        if whole or big or "32-bit" in own:
+            rules[f"APP {words[1].upper()}"] = INT32
+    return rules
+
+
+def judge(obs: Observation, slow_ms: float = 500.0, rules: Optional[dict] = None) -> List[Verdict]:
     out: List[Verdict] = []
     restarted = obs.uptime_before is not None and obs.uptime_after is not None and obs.uptime_after < obs.uptime_before
     if obs.partial:
@@ -132,7 +161,14 @@ def judge(obs: Observation, slow_ms: float = 500.0) -> List[Verdict]:
         out.append(_v("oversized", f"the reply is {len(reply)} characters long"))
     if obs.latency_ms > slow_ms:
         out.append(_v("slow", f"the reply took {obs.latency_ms:.0f} ms (limit {slow_ms:.0f} ms)"))
-    if obs.family == "overflow" and core.startswith("OK") and obs.text.upper().startswith("APP "):
+    words = _ID.sub("", obs.text).split()
+    key = " ".join(words[:2]).upper() if len(words) > 1 and words[0].upper() == "APP" else ""
+    rng = (rules or {}).get(key)
+    outside = [w for w in words[2:] if _NUM.match(w) and rng and not rng[0] <= int(w) <= rng[1]]
+    if core.startswith("OK") and outside:
+        out.append(_v("out_of_range", f"{outside[0][:24]} is outside the specified range {rng[0]}..{rng[1]} of "
+                                      f"{key}, but the reply was {reply[:60]!r} instead of an error"))
+    elif obs.family == "overflow" and core.startswith("OK") and obs.text.upper().startswith("APP "):
         out.append(_v("accepted", f"{obs.text!r} was accepted: {reply[:80]!r}"))
     return out
 
