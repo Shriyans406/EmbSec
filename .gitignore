@@ -28,6 +28,8 @@ data/*.db-shm
 data/pipelines/
 data/remediations/
 data/optimizations/
+data/records/
+data/reports/
 data/logs/
 data/artifacts/
 

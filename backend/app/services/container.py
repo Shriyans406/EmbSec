@@ -16,6 +16,7 @@ from ..fuzz.engine import FuzzService
 from ..knowledge.service import KnowledgeService
 from ..optimize.engine import OptimizationEngine
 from ..pipeline.engine import PipelineEngine
+from ..records.service import RecordService
 from ..profiling.service import ProfilingService
 from ..remediate.engine import RemediationEngine
 from ..settings import Settings
@@ -48,6 +49,7 @@ class Services:
     profiling: Optional["ProfilingService"] = None
     optimizations: Optional["OptimizationEngine"] = None
     knowledge: Optional["KnowledgeService"] = None
+    records: Optional["RecordService"] = None
 
     def start(self) -> None:
         # orphan recovery first (before any worker runs), and only here: building the services must not change
@@ -107,4 +109,5 @@ def build_services(settings: Settings, llm_factory=None) -> Services:
     s.fuzz = FuzzService(settings.db_path, jobs, device, s.tests, s.pipelines)
     s.remediations = RemediationEngine(s, settings)
     s.optimizations = OptimizationEngine(s, settings)
+    s.records = RecordService(s)
     return s
