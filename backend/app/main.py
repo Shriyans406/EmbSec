@@ -29,6 +29,7 @@ from .api import observe as api_observe
 from .api import optimizations as api_optimizations
 from .api import pipelines as api_pipelines
 from .api import profiling as api_profiling
+from .api import records as api_records
 from .api import remediations as api_remediations
 from .api import testsuites as api_testsuites
 from .api import tools as api_tools
@@ -106,6 +107,7 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
     app.include_router(api_knowledge.router)
     app.include_router(api_live.router)
     app.include_router(api_observe.router)
+    app.include_router(api_records.router)
 
     # the dashboard (frontend/dist, made by  npm run build  in the frontend folder), served at /ui/
     if (settings.dashboard_dir / "index.html").is_file():

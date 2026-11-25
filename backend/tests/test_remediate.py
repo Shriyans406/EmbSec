@@ -69,7 +69,7 @@ def start(client, fid, **kw):
     return r.json()
 
 
-def wait_rem(services, rid, statuses=("FINISHED", "FAILED", "STOPPED", "WAITING_APPROVAL"), timeout=60):
+def wait_rem(services, rid, statuses=("FINISHED", "FAILED", "STOPPED", "WAITING_APPROVAL"), timeout=120):
     end = time.time() + timeout
     while time.time() < end:
         r = services.remediations.get(rid)

@@ -45,7 +45,7 @@ class Builds:
         from app.build.engine import BuildStore
 
         next_id = len(BuildStore(cfg.db_path).list(None, 100)) + 1
-        data, src = add_build(self.services, next_id, seed=next_id, src=f"{next_id:02x}" * 32, status=status,
+        data, src = add_build(self.services, next_id, seed=next_id, status=status,
                               project=name, files=files,
                               diagnostics=[] if status == BUILD_SUCCESS else [
                                   {"severity": "error", "message": "expected ';'", "file": "app/app.c", "line": 3,

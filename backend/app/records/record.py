@@ -166,15 +166,15 @@ def timeline(rec: dict) -> List[dict]:
     ev = []
     for e in rec.get("events", []):
         ev.append({"ts": e["ts"], "source": "task", "what": f"[{e['stage']}] {e['kind']}: {e['message']}"})
-    for a in rec["agents"]:
-        for s in a["steps"]:
+    for a in rec.get("agents", []):
+        for s in a.get("steps", []):
             ev.append({"ts": s["ts"], "source": f"agent run {a['id']} ({a['agent']})",
                        "what": f"{s['kind']} {s['name']}" + ("" if s["ok"] is None else (" ok" if s["ok"] else " FAILED"))})
-    for j in rec["jobs"]:
-        for line in j["log"]:
+    for j in rec.get("jobs", []):
+        for line in j.get("log", []):
             ts, _, text = line.partition(" ")
             ev.append({"ts": ts, "source": f"job {j['id']} ({j['kind']})", "what": text})
-    for a in rec["audit"]:
+    for a in rec.get("audit", []):
         ev.append({"ts": a["ts"], "source": "audit", "what": f"{a['actor']}/{a['role']} {a['action']} "
                                                              f"{(a['target'] or '')[:60]} -> {a['outcome']}"})
     ev.sort(key=lambda e: (e["ts"] or ""))

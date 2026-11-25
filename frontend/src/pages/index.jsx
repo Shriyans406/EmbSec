@@ -9,6 +9,7 @@ import Jobs from './Jobs'
 import Knowledge from './Knowledge'
 import Overview from './Overview'
 import Profiling from './Profiling'
+import Reports from './Reports'
 import Tests from './Tests'
 import { Optimisations, Pipelines, Remediations } from './workflows'
 
@@ -25,6 +26,7 @@ export const PAGES = [
   { path: 'profiling', label: 'Profiling', component: Profiling },
   { path: 'optimisations', label: 'Optimisation', component: Optimisations },
   { path: 'knowledge', label: 'Knowledge', component: Knowledge },
+  { path: 'reports', label: 'Reports', component: Reports },
   { path: 'jobs', label: 'Jobs', component: Jobs },
   { path: 'audit', label: 'Audit log', component: Audit, need: 'operator' },
 ]

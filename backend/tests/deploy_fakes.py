@@ -3,7 +3,7 @@ import hashlib
 import struct
 
 from app.build.engine import SUCCESS as BUILD_SUCCESS
-from app.build.engine import BuildResult, BuildStore
+from app.build.engine import BuildResult, BuildStore, hash_sources
 from app.build.uf2 import MAGIC0, MAGIC1, MAGIC_END, RP2040_FAMILY_ID, XIP_BASE
 from app.deploy.board import BOOTSEL, RUNNING, UNRESPONSIVE, BoardState, BootloaderError
 
@@ -59,7 +59,7 @@ class FakeBoard:
         return True, "ok"
 
 
-def add_build(services, build_id=1, seed=1, src="ab" * 32, status=BUILD_SUCCESS, project="demo",
+def add_build(services, build_id=1, seed=1, src=None, status=BUILD_SUCCESS, project="demo",
               files=None, diagnostics=None, flash_bytes=0, ram_bytes=0):
     """Create a build record, its UF2 and its source snapshot, as the build engine would have."""
     cfg = services.cfg
@@ -70,6 +70,8 @@ def add_build(services, build_id=1, seed=1, src="ab" * 32, status=BUILD_SUCCESS,
     for name, text in (files or {"app.c": "int x;\n"}).items():
         (d / "app_src" / name).write_bytes(text.encode("utf-8"))
     (d / "build.log").write_bytes(b"line1\nline2\nline3\n")
+    if src is None:                     # like the build engine: the hash of the saved sources
+        src = hash_sources([p for p in (d / "app_src").iterdir() if p.is_file()])
     store = BuildStore(cfg.db_path)
     bid = store.start(project, "2026-01-01T00:00:00+00:00")
     assert bid == build_id, (bid, build_id)

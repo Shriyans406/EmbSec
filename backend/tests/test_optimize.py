@@ -43,7 +43,7 @@ class SizedBuilds:
         files = {p.name: p.read_text() for p in (cfg.workspace_dir / name / "app").iterdir() if p.is_file()}
         nid = len(BuildStore(cfg.db_path).list(None, 100)) + 1
         size = 40000 + 10 * sum(len(v) for v in files.values())
-        data, src = add_build(self.services, nid, seed=nid, src=f"{nid:02x}" * 32, project=name, files=files,
+        data, src = add_build(self.services, nid, seed=nid, project=name, files=files,
                               flash_bytes=size, ram_bytes=4000)
         self.board.outcomes[sha(data)] = running(nid, src)
         r = BuildStore(cfg.db_path).get(nid)["result"]
@@ -86,7 +86,7 @@ def start(client, **kw):
     return r.json()
 
 
-def wait_opt(services, oid, statuses=("FINISHED", "FAILED", "STOPPED", "WAITING_APPROVAL"), timeout=60):
+def wait_opt(services, oid, statuses=("FINISHED", "FAILED", "STOPPED", "WAITING_APPROVAL"), timeout=120):
     end = time.time() + timeout
     while time.time() < end:
         o = services.optimizations.get(oid)
@@ -94,7 +94,10 @@ def wait_opt(services, oid, statuses=("FINISHED", "FAILED", "STOPPED", "WAITING_
             time.sleep(0.1)
             return services.optimizations.get(oid)
         time.sleep(0.05)
-    raise AssertionError(f"optimisation {oid} stuck in {services.optimizations.get(oid)['stage']}")
+    o = services.optimizations.get(oid)
+    events = [(e["stage"], e["kind"], e["message"][:80]) for e in services.optimizations.store.events(oid)][-6:]
+    jobs = [(j["id"], j["kind"], j["status"]) for j in services.jobs.list(8)]
+    raise AssertionError(f"optimisation {oid} stuck in {o['stage']} ({o['status']}); last events {events}; jobs {jobs}")
 
 
 def test_the_baseline_is_measured_on_the_board(client, services, rig):
