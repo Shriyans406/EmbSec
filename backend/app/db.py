@@ -346,6 +346,39 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         )""",
         "CREATE INDEX IF NOT EXISTS idx_optimization_events ON optimization_events (optimization_id, id)",
     ]),
+    (12, "knowledge", [
+        """CREATE TABLE IF NOT EXISTS knowledge (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            project TEXT,
+            tags TEXT,
+            source_type TEXT,
+            source_id INTEGER,
+            build_id INTEGER,
+            src_hash TEXT,
+            importance INTEGER NOT NULL DEFAULT 2,
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            UNIQUE (source_type, source_id, kind)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge (project, kind)",
+        """CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+            title, body, tags, project, content='knowledge', content_rowid='id', tokenize='porter unicode61')""",
+        """CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge BEGIN
+            INSERT INTO knowledge_fts (rowid, title, body, tags, project)
+            VALUES (new.id, new.title, new.body, new.tags, new.project); END""",
+        """CREATE TRIGGER IF NOT EXISTS knowledge_ad AFTER DELETE ON knowledge BEGIN
+            INSERT INTO knowledge_fts (knowledge_fts, rowid, title, body, tags, project)
+            VALUES ('delete', old.id, old.title, old.body, old.tags, old.project); END""",
+        """CREATE TRIGGER IF NOT EXISTS knowledge_au AFTER UPDATE ON knowledge BEGIN
+            INSERT INTO knowledge_fts (knowledge_fts, rowid, title, body, tags, project)
+            VALUES ('delete', old.id, old.title, old.body, old.tags, old.project);
+            INSERT INTO knowledge_fts (rowid, title, body, tags, project)
+            VALUES (new.id, new.title, new.body, new.tags, new.project); END""",
+    ]),
 ]
 
 
