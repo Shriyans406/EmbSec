@@ -1,10 +1,12 @@
 // Every page of the dashboard. `need` is the least role that sees it in the menu (the API checks again anyway).
 import Agents from './Agents'
 import Approvals from './Approvals'
+import Audit from './Audit'
 import Device from './Device'
 import Firmware from './Firmware'
 import Fuzz from './Fuzz'
 import Jobs from './Jobs'
+import Knowledge from './Knowledge'
 import Overview from './Overview'
 import Profiling from './Profiling'
 import Tests from './Tests'
@@ -22,5 +24,7 @@ export const PAGES = [
   { path: 'remediations', label: 'Remediation', component: Remediations },
   { path: 'profiling', label: 'Profiling', component: Profiling },
   { path: 'optimisations', label: 'Optimisation', component: Optimisations },
+  { path: 'knowledge', label: 'Knowledge', component: Knowledge },
   { path: 'jobs', label: 'Jobs', component: Jobs },
+  { path: 'audit', label: 'Audit log', component: Audit, need: 'operator' },
 ]

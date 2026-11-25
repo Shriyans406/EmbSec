@@ -45,3 +45,30 @@ def test_operators_also_see_the_audit_log(client):
         client.post("/selftest", headers=auth("agent"), json={"seconds": 0})
         entry = receive_until(ws, lambda m: m["type"] == "audit" and m["entry"]["action"] == "selftest.create")
         assert entry["entry"]["role"] == "agent"
+
+
+def test_the_built_dashboard_is_served_at_ui(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    from conftest import make_settings
+
+    dist = tmp_path / "frontend" / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>AEISP Control Room</title><div id=root></div>")
+    (dist / "assets" / "app.js").write_text("console.log('x')")
+    with TestClient(create_app(make_settings(tmp_path))) as c:
+        r = c.get("/ui/")
+        assert r.status_code == 200 and "AEISP Control Room" in r.text
+        assert c.get("/ui/assets/app.js").status_code == 200
+        assert c.get("/", follow_redirects=False).headers["location"] == "/docs"
+
+
+def test_without_a_build_there_is_no_ui_route(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    from conftest import make_settings
+
+    with TestClient(create_app(make_settings(tmp_path))) as c:
+        assert c.get("/ui/").status_code == 404

@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from .api import agents as api_agents
@@ -103,6 +104,10 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
     app.include_router(api_optimizations.router)
     app.include_router(api_knowledge.router)
     app.include_router(api_live.router)
+
+    # the dashboard (frontend/dist, made by  npm run build  in the frontend folder), served at /ui/
+    if (settings.dashboard_dir / "index.html").is_file():
+        app.mount("/ui", StaticFiles(directory=str(settings.dashboard_dir), html=True), name="dashboard")
     return app
 
 

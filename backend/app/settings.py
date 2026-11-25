@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]  # backend/app/settings.py -> project root
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 
 
 class Settings(BaseSettings):
@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     @property
     def ai_configured(self) -> bool:
         return bool(self.gemini_api_key)
+
+    @property
+    def dashboard_dir(self) -> Path:
+        return self.root / "frontend" / "dist"
 
     @property
     def checkpoint_db_path(self) -> Path:
