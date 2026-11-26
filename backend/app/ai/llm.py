@@ -179,6 +179,7 @@ class GeminiLLM(BaseLLM):
         self.model = model
         self.retries = retries
         self.temperature = temperature
+        self.wait = wait_exponential_jitter(initial=2, max=30)     # tests replace it with no wait
         self._client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=timeout_s * 1000))
 
     # ------------------------------------------------------------ conversion
@@ -238,7 +239,7 @@ class GeminiLLM(BaseLLM):
 
         try:
             for attempt in Retrying(retry=retry_if_exception(_retryable), stop=stop_after_attempt(self.retries + 1),
-                                    wait=wait_exponential_jitter(initial=2, max=30), reraise=True):
+                                    wait=self.wait, reraise=True):
                 with attempt:
                     resp = once()
         except RetryError as e:  # pragma: no cover (reraise=True makes this rare)

@@ -296,13 +296,23 @@ def _flash_and_verify(board, image: Image, before: BoardState, log: DeployLog) -
     except BootloaderError as e:
         log(f"could not enter the bootloader: {e}")
         return _Outcome(False, "bootloader", str(e), None, "", False)
+    except Exception as e:  # noqa: BLE001  an unexpected fault: the board may already be in the bootloader
+        log(f"unexpected error while entering the bootloader: {type(e).__name__}: {e}")
+        return _Outcome(False, "bootloader", f"unexpected {type(e).__name__}: {e}", None, "", True)
     log(f"bootloader ready (via {method})")
     try:
         board.flash(image.path, log)
     except FlashError as e:
         log(f"flash failed: {e}")
         return _Outcome(False, "flash", str(e), None, method, True)
-    state = board.wait_for_firmware(0, log)
+    except Exception as e:  # noqa: BLE001  e.g. a USB driver fault or a cable pulled at the wrong moment
+        log(f"unexpected error while flashing: {type(e).__name__}: {e}")
+        return _Outcome(False, "flash", f"unexpected {type(e).__name__}: {e}", None, method, True)
+    try:
+        state = board.wait_for_firmware(0, log)
+    except Exception as e:  # noqa: BLE001
+        log(f"unexpected error while waiting for the board: {type(e).__name__}: {e}")
+        return _Outcome(False, "verify", f"unexpected {type(e).__name__}: {e}", None, method, True)
     log(f"after flashing: {state.summary()}")
     problems = _verify(board, image, before, state, log)
     if problems:
