@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import hmac
 import secrets
+import threading
+import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Optional
+from typing import Deque, Dict, Optional
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -47,6 +50,41 @@ def principal_for(tokens: dict, presented: str) -> Optional[Principal]:
     return found
 
 
+class FailedAuthLimiter:
+    """Slows down token guessing: after `limit` wrong tokens from one client within `window_s` seconds, that client
+    gets 429 until the window has passed. Missing tokens do not count (the dashboard's first load sends none)."""
+
+    def __init__(self, limit: int = 20, window_s: float = 60.0) -> None:
+        self.limit, self.window_s = limit, window_s
+        self._fails: Dict[str, Deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def _recent(self, client: str, now: float) -> Deque[float]:
+        q = self._fails.setdefault(client, deque())
+        while q and now - q[0] > self.window_s:
+            q.popleft()
+        return q
+
+    def blocked(self, client: str) -> bool:
+        with self._lock:
+            return len(self._recent(client, time.monotonic())) >= self.limit
+
+    def failed(self, client: str) -> None:
+        with self._lock:
+            now = time.monotonic()
+            self._recent(client, now).append(now)
+            if len(self._fails) > 1000:                   # forget idle clients so this cannot grow without bound
+                for k in [k for k, q in self._fails.items() if not q]:
+                    del self._fails[k]
+
+
+def auth_limiter(app) -> FailedAuthLimiter:
+    lim = getattr(app.state, "auth_limiter", None)
+    if lim is None:
+        lim = app.state.auth_limiter = FailedAuthLimiter()
+    return lim
+
+
 def authenticate(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> Principal:
     tokens = request.app.state.settings.role_tokens
     if not tokens:
@@ -54,8 +92,13 @@ def authenticate(request: Request, creds: Optional[HTTPAuthorizationCredentials]
                        "no API tokens are configured; run:  python -m app.cli make-tokens")
     if creds is None or creds.scheme.lower() != "bearer" or not creds.credentials:
         raise ApiError(401, "unauthorized", "missing API token (send  Authorization: Bearer <token>)")
+    client = request.client.host if request.client else "-"
+    limiter = auth_limiter(request.app)
+    if limiter.blocked(client):
+        raise ApiError(429, "too_many_failures", "too many wrong API tokens from this address; wait a minute")
     p = principal_for(tokens, creds.credentials)
     if p is None:
+        limiter.failed(client)
         raise ApiError(401, "unauthorized", "the API token is not valid")
     request.state.principal = p
     return p

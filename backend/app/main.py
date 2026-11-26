@@ -40,6 +40,14 @@ from .settings import VERSION, Settings
 
 log = logging.getLogger("aeisp.http")
 
+# sent with every answer: no MIME sniffing, the pages cannot be framed by another site, no referrer leaks
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+}
+
 
 def create_app(settings: Optional[Settings] = None, services: Optional[Services] = None) -> FastAPI:
     settings = settings or Settings()
@@ -76,6 +84,10 @@ def create_app(settings: Optional[Settings] = None, services: Optional[Services]
             response = await call_next(request)
             status = response.status_code
             response.headers["X-Request-ID"] = rid
+            for k, v in SECURITY_HEADERS.items():
+                response.headers.setdefault(k, v)
+            if not request.url.path.startswith("/ui"):        # API answers can hold lab data: never cache them
+                response.headers.setdefault("Cache-Control", "no-store")
             return response
         finally:
             ms = (time.perf_counter() - t0) * 1000

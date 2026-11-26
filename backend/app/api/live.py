@@ -19,7 +19,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
 
 from ..db import connect
-from ..security import principal_for
+from ..security import auth_limiter, principal_for
 from ..settings import VERSION
 
 router = APIRouter(tags=["live"])
@@ -75,8 +75,15 @@ class Feed:
 @router.websocket("/ws")
 async def live(websocket: WebSocket, token: str = Query("")):
     app = websocket.app
+    client = websocket.client.host if websocket.client else "-"
+    limiter = auth_limiter(app)
+    if limiter.blocked(client):
+        await websocket.close(code=4429)
+        return
     principal = principal_for(app.state.settings.role_tokens, token) if token else None
     if principal is None:
+        if token:
+            limiter.failed(client)
         await websocket.close(code=4401)
         return
     await websocket.accept()
