@@ -47,5 +47,6 @@ These need a person and are not automated:
 
 ## Last result
 
-Release 1.0.0 on the development PC, with the board connected and the backend running separately:
-A1–A17 pass. A2 warns only if no Gemini key is set. H1 passed (9/9) in the last board session.
+Release 1.0.0, 2026-11-26, on the development PC: **A1–A17 pass (17 of 17)**. All 299 tests in 23 files ran. H1
+was not re-run for this release. The last board session passed 9 of 9 hardware tests on harness 0.4.0 (build
+#12).

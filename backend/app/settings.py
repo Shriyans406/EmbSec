@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]  # backend/app/settings.py -> project root
 
-VERSION = "0.16.0"
+VERSION = "1.0.0"
 
 
 class Settings(BaseSettings):
